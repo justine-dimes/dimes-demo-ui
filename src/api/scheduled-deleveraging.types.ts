@@ -1,10 +1,13 @@
 // ---------------------------------------------------------------------------
 // SCHEDULED DELEVERAGING (sandbox-only preview)
 //
-// Mirrors the API's upcoming `deleverageSchedule` DTO field on offers and
-// positions. The field is not in @dimes-dot-fi/sdk yet — once the API ships
-// it, these types move to the SDK and this local mirror gets deleted in
-// favor of re-exports from src/api/types.ts.
+// Parses the API's `deleverageSchedule` DTO field on offers and positions
+// (ApiDeleverageSchedule: prices as USD-pip strings, deposits as USDC-unit
+// strings, price steps and time-trim steps mixed in one `steps` array) into
+// the USD-denominated view model the panel renders. The field is not in
+// @dimes-dot-fi/sdk yet — once the API ships it, the wire types move to the
+// SDK and this local mirror gets deleted in favor of re-exports from
+// src/api/types.ts.
 // ---------------------------------------------------------------------------
 
 export interface DeleverageScheduleStep {
@@ -67,45 +70,121 @@ function isMockEnabled(): boolean {
   }
 }
 
-function isScheduleStep(value: unknown): value is DeleverageScheduleStep {
+// Wire shapes (ApiDeleverageSchedule / ApiDeleverageScheduleStep from the API)
+
+interface WirePriceStep {
+  stepIndex: number;
+  triggerPriceUsdPips: string;
+  sellFractionBps: number;
+}
+
+interface WireTimeStep {
+  stepIndex: number;
+  triggerElapsedFraction: number;
+  trimFractionBps: number;
+}
+
+const USD_PIPS_PER_USD = 10_000;
+const USDC_UNITS_PER_USD = 1_000_000;
+const PRICE_DISPLAY_DECIMALS = 4;
+const USD_DISPLAY_DECIMALS = 2;
+
+function pipsToUsd(pips: string): string | null {
+  const value = Number(pips);
+  if (!Number.isFinite(value)) return null;
+  return (value / USD_PIPS_PER_USD).toFixed(PRICE_DISPLAY_DECIMALS);
+}
+
+function unitsToUsd(units: string): string | null {
+  const value = Number(units);
+  if (!Number.isFinite(value)) return null;
+  return (value / USDC_UNITS_PER_USD).toFixed(USD_DISPLAY_DECIMALS);
+}
+
+function isWirePriceStep(value: unknown): value is WirePriceStep {
   if (typeof value !== 'object' || value === null) return false;
   const step = value as Record<string, unknown>;
   return (
     typeof step.stepIndex === 'number' &&
-    typeof step.triggerPriceUsd === 'string' &&
+    typeof step.triggerPriceUsdPips === 'string' &&
     typeof step.sellFractionBps === 'number'
   );
 }
 
-function isTimeTrim(value: unknown): value is DeleverageScheduleTimeTrim {
+function isWireTimeStep(value: unknown): value is WireTimeStep {
   if (typeof value !== 'object' || value === null) return false;
-  const trim = value as Record<string, unknown>;
+  const step = value as Record<string, unknown>;
   return (
-    typeof trim.triggerElapsedFraction === 'number' &&
-    typeof trim.trimFractionBps === 'number'
+    typeof step.stepIndex === 'number' &&
+    typeof step.triggerElapsedFraction === 'number' &&
+    typeof step.trimFractionBps === 'number'
   );
 }
 
 function parseSchedule(raw: unknown): DeleverageScheduleView | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const schedule = raw as Record<string, unknown>;
-  const hasValidSteps =
+  const hasValidWireSteps =
     Array.isArray(schedule.steps) &&
     schedule.steps.length > 0 &&
-    schedule.steps.every(isScheduleStep);
-  const hasValidTimeTrims =
-    schedule.timeTrims === undefined ||
-    (Array.isArray(schedule.timeTrims) && schedule.timeTrims.every(isTimeTrim));
-  const isValid =
-    hasValidSteps &&
-    hasValidTimeTrims &&
-    typeof schedule.entryBufferFloorPriceUsd === 'string' &&
-    typeof schedule.debtClearPriceUsd === 'string' &&
-    typeof schedule.safetyDepositRequiredUsd === 'string' &&
-    (schedule.safetyDepositCollectedUsd === undefined ||
-      typeof schedule.safetyDepositCollectedUsd === 'string');
-  if (!isValid) return null;
-  return schedule as unknown as DeleverageScheduleView;
+    schedule.steps.every(
+      (step) => isWirePriceStep(step) || isWireTimeStep(step),
+    );
+  const hasValidPrices =
+    typeof schedule.entryBufferFloorPriceUsdPips === 'string' &&
+    typeof schedule.debtClearPriceUsdPips === 'string' &&
+    typeof schedule.safetyDepositRequiredUsdcUnits === 'string' &&
+    typeof schedule.safetyDepositCollectedUsdcUnits === 'string';
+  if (!hasValidWireSteps || !hasValidPrices) return null;
+
+  const wireSteps = schedule.steps as (WirePriceStep | WireTimeStep)[];
+  const priceSteps: DeleverageScheduleStep[] = [];
+  const timeTrims: DeleverageScheduleTimeTrim[] = [];
+  for (const step of wireSteps) {
+    if (isWirePriceStep(step)) {
+      const triggerPriceUsd = pipsToUsd(step.triggerPriceUsdPips);
+      if (triggerPriceUsd === null) return null;
+      priceSteps.push({
+        stepIndex: priceSteps.length,
+        triggerPriceUsd,
+        sellFractionBps: step.sellFractionBps,
+      });
+    } else {
+      timeTrims.push({
+        triggerElapsedFraction: step.triggerElapsedFraction,
+        trimFractionBps: step.trimFractionBps,
+      });
+    }
+  }
+  if (priceSteps.length === 0) return null;
+
+  const entryBufferFloorPriceUsd = pipsToUsd(
+    schedule.entryBufferFloorPriceUsdPips as string,
+  );
+  const debtClearPriceUsd = pipsToUsd(schedule.debtClearPriceUsdPips as string);
+  const safetyDepositRequiredUsd = unitsToUsd(
+    schedule.safetyDepositRequiredUsdcUnits as string,
+  );
+  const safetyDepositCollectedUsd = unitsToUsd(
+    schedule.safetyDepositCollectedUsdcUnits as string,
+  );
+  if (
+    entryBufferFloorPriceUsd === null ||
+    debtClearPriceUsd === null ||
+    safetyDepositRequiredUsd === null ||
+    safetyDepositCollectedUsd === null
+  ) {
+    return null;
+  }
+
+  return {
+    entryBufferFloorPriceUsd,
+    steps: priceSteps,
+    timeTrims: timeTrims.length > 0 ? timeTrims : undefined,
+    debtClearPriceUsd,
+    safetyDepositRequiredUsd,
+    safetyDepositCollectedUsd,
+  };
 }
 
 /**
