@@ -22,6 +22,8 @@ import { ErrorBanner } from './ErrorBanner'
 import { StatRow } from './StatRow'
 import { StatGroup, PnlHero } from './CardViewParts'
 import { LeverageChart } from './LeverageChart'
+import { getDeleverageSchedule } from '../api/scheduled-deleveraging.types'
+import { ScheduledDeleveragingPanel } from './ScheduledDeleveragingPanel'
 import { PositionIdRow } from './PositionCard'
 import { useCopyFlash } from '../hooks/useCopyFlash'
 
@@ -593,6 +595,18 @@ function OpenPositionDetail({
             <LeverageChart unwinds={unwinds} isLoading={isUnwindsLoading} />
           </div>
         </StatGroup>
+
+        {(() => {
+          const deleverageSchedule = getDeleverageSchedule(position)
+          if (!deleverageSchedule) return null
+          return (
+            <ScheduledDeleveragingPanel
+              schedule={deleverageSchedule}
+              entryPriceUsd={position.entry.effectiveEntryPriceUsd ?? position.entry.priceUsd}
+              currentPriceUsd={position.current.markPriceUsd}
+            />
+          )
+        })()}
 
         <StatGroup label="Timing" last>
           <StatRow label="Market Status" value={isVoided ? 'Voided' : position.timing.marketStatus} />

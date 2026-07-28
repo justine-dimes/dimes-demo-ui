@@ -3,6 +3,8 @@ import type { Offer } from '../api/types'
 import { computeMaxGain } from '../api/types'
 import { formatUsd } from '../utils/format'
 import { formatFillPct } from '../utils/partialFill'
+import { getDeleverageSchedule } from '../api/scheduled-deleveraging.types'
+import { ScheduledDeleveragingPanel } from './ScheduledDeleveragingPanel'
 import { StatRow } from './StatRow'
 
 const USDC_UNITS_PER_USD = 1e6
@@ -74,6 +76,7 @@ export function QuoteDetails({
 
   const maxGain = useMemo(() => maxGainForOffer(offer), [offer])
   const prevMaxGain = useMemo(() => (prev ? maxGainForOffer(prev) : null), [prev])
+  const deleverageSchedule = useMemo(() => getDeleverageSchedule(offer), [offer])
 
   return (
     <div style={{ padding: '12px 0' }}>
@@ -120,6 +123,14 @@ export function QuoteDetails({
           label="Partial fill"
           value={offer.minFillBps != null ? `Allowed · min ${formatFillPct(offer.minFillBps)}` : 'Allowed'}
           valueColor="var(--yellow)"
+        />
+      )}
+
+      {deleverageSchedule && (
+        <ScheduledDeleveragingPanel
+          schedule={deleverageSchedule}
+          entryPriceUsd={offer.entryPriceUsd}
+          last
         />
       )}
 
