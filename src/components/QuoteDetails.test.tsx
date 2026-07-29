@@ -66,26 +66,28 @@ afterEach(() => {
 })
 
 describe('QuoteDetails scheduled-deleveraging integration', () => {
-  it('renders the full schedule panel and comparison when the QA mock is enabled', () => {
+  it('renders the schedule panel as a shadow preview when the QA mock is enabled', () => {
     window.sessionStorage.setItem(MOCK_SESSION_KEY, '1')
     render(<QuoteDetails offer={offer} />)
 
-    expect(screen.getByText('Scheduled Deleveraging')).toBeInTheDocument()
+    expect(screen.getByText('Scheduled Deleveraging (shadow)')).toBeInTheDocument()
     expect(screen.getByText('Standard (today)')).toBeInTheDocument()
-    expect(screen.getByText('Scheduled (this quote)')).toBeInTheDocument()
+    expect(screen.getByText('Scheduled (shadow preview)')).toBeInTheDocument()
+    expect(screen.getByText('shadow — not yet executing')).toBeInTheDocument()
     expect(screen.getByText('Price Ladder')).toBeInTheDocument()
     expect(screen.getByText('Position Remaining')).toBeInTheDocument()
     expect(screen.getByRole('slider', { name: 'What-if price' })).toBeInTheDocument()
-    // Legacy stat stays visible but annotated, never removed.
+    // The engine is still the real manager — its liquidation price stays a
+    // first-class stat, with no superseded chip and no strike-through.
     expect(screen.getByText('Liquidation Price')).toBeInTheDocument()
-    expect(screen.getByText('superseded by schedule')).toBeInTheDocument()
+    expect(screen.queryByText('superseded by schedule')).not.toBeInTheDocument()
     expect(screen.getByText('$0.18')).toBeInTheDocument()
   })
 
   it('keeps the current quote view untouched when no schedule exists', () => {
     render(<QuoteDetails offer={offer} />)
 
-    expect(screen.queryByText('Scheduled Deleveraging')).not.toBeInTheDocument()
+    expect(screen.queryByText('Scheduled Deleveraging (shadow)')).not.toBeInTheDocument()
     expect(screen.queryByText('Standard (today)')).not.toBeInTheDocument()
     expect(screen.queryByText('superseded by schedule')).not.toBeInTheDocument()
     expect(screen.getByText('Liquidation Price')).toBeInTheDocument()

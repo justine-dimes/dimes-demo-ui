@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildQuoteParams } from '@dimes-dot-fi/sdk'
-import { getDimesClient, setScheduledDeleverageOptIn } from './dimesClient'
+import { getDimesClient } from './dimesClient'
 
 // The SDK client binds globalThis.fetch at construction, and the module
 // constructs its singleton lazily — stubbing in beforeEach (before the first
@@ -21,7 +21,6 @@ beforeEach(() => {
 })
 
 afterAll(() => {
-  setScheduledDeleverageOptIn(false)
   vi.unstubAllGlobals()
 })
 
@@ -33,31 +32,24 @@ const quoteParams = buildQuoteParams({
   slippageBps: 800,
 })
 
-describe('scheduled-deleveraging quote opt-in', () => {
-  it('sends use_scheduled_deleverage: true on draft quotes while opted in', async () => {
-    setScheduledDeleverageOptIn(true)
+// Shadow-mode contract: the API attaches the schedule to every eligible draft
+// quote on its own, so the client must send the stock SDK body — the retired
+// opt-in field must never reappear on the wire.
+describe('quote requests under shadow mode', () => {
+  it('sends the plain SDK draft-quote body with no scheduled-deleverage field', async () => {
     await getDimesClient().createDraftQuote(quoteParams)
 
     expect(requests).toHaveLength(1)
     expect(requests[0].url).toContain('/v1/prediction-markets/draft-quotes')
-    expect(requests[0].body.use_scheduled_deleverage).toBe(true)
+    expect('use_scheduled_deleverage' in requests[0].body).toBe(false)
     expect(requests[0].body.market_ticker).toBe('TEST-MARKET')
   })
 
-  it('sends it on direct quotes too (the auto-correct path)', async () => {
-    setScheduledDeleverageOptIn(true)
+  it('sends the plain body on direct quotes too (the auto-correct path)', async () => {
     await getDimesClient().createQuote(quoteParams)
 
     expect(requests).toHaveLength(1)
     expect(requests[0].url).toContain('/v1/prediction-markets/quotes')
-    expect(requests[0].body.use_scheduled_deleverage).toBe(true)
-  })
-
-  it('omits the field entirely while opted out — current behaviour untouched', async () => {
-    setScheduledDeleverageOptIn(false)
-    await getDimesClient().createDraftQuote(quoteParams)
-
-    expect(requests).toHaveLength(1)
     expect('use_scheduled_deleverage' in requests[0].body).toBe(false)
     expect(requests[0].body.market_ticker).toBe('TEST-MARKET')
   })

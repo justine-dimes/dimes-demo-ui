@@ -2,7 +2,9 @@ import { useMemo, useState } from 'react'
 import type {
   DeleverageScheduleView,
   DeleverageScheduleStep,
+  ShadowDeleverageView,
 } from '../api/scheduled-deleveraging.types'
+import type { PositionUnwindList } from '../api/types'
 import type {
   ScheduleBasisInput,
   ScheduleWalkthrough,
@@ -20,6 +22,7 @@ import {
   DEBT_CLEAR_COLOR,
   type ScheduleHoverKey,
 } from './DeleverageScheduleCharts'
+import { ShadowDeleverageTimeline } from './ShadowDeleverageTimeline'
 
 const LIQUIDATION_COLOR = '#F5A623'
 const PCT_PER_FRACTION = 100
@@ -38,6 +41,8 @@ export function ScheduledDeleveragingPanel({
   currentPriceUsd,
   liquidationPriceUsd,
   showComparison,
+  shadowDeleverage,
+  unwinds,
   last,
 }: {
   schedule: DeleverageScheduleView
@@ -46,6 +51,8 @@ export function ScheduledDeleveragingPanel({
   currentPriceUsd?: string
   liquidationPriceUsd?: string
   showComparison?: boolean
+  shadowDeleverage?: ShadowDeleverageView | null
+  unwinds?: PositionUnwindList
   last?: boolean
 }) {
   const walkthrough = useMemo(() => {
@@ -61,8 +68,19 @@ export function ScheduledDeleveragingPanel({
 
   const [scrubPriceUsd, setScrubPriceUsd] = useState<number | null>(null)
 
+  // Ladder lines the shadow run has fired, keyed the way the ladder knows
+  // them: 4-decimal trigger-price strings plus 'debt-clear'.
+  const shadowFiredKeys = useMemo(() => {
+    if (shadowDeleverage == null || shadowDeleverage.steps.length === 0) return undefined
+    const keys = new Set<string>()
+    for (const step of shadowDeleverage.steps) {
+      keys.add(step.triggerKind === 'debtClear' ? 'debt-clear' : step.triggerPriceUsd)
+    }
+    return keys
+  }, [shadowDeleverage])
+
   return (
-    <StatGroup label="Scheduled Deleveraging" last={last}>
+    <StatGroup label="Scheduled Deleveraging (shadow)" last={last}>
       {showComparison && liquidationPriceUsd != null && (
         <ProtectionComparison
           schedule={schedule}
@@ -87,7 +105,12 @@ export function ScheduledDeleveragingPanel({
         scrubPriceUsd={scrubPriceUsd}
         hoverKey={hoverKey}
         onHoverKey={setHoverKey}
+        shadowFiredKeys={shadowFiredKeys}
       />
+
+      {shadowDeleverage != null && (
+        <ShadowDeleverageTimeline shadow={shadowDeleverage} unwinds={unwinds} />
+      )}
 
       {walkthrough && (
         <WhatIfScrubber
@@ -112,7 +135,10 @@ export function ScheduledDeleveragingPanel({
 }
 
 // ---------------------------------------------------------------------------
-// Engine vs schedule, side by side, in plain language.
+// Engine vs schedule, side by side, in plain language. Shadow framing: the
+// engine still manages every position; the schedule card previews the
+// proposed mechanism the API now computes and runs in shadow on every
+// eligible quote — nothing the user selected, nothing that executes.
 // ---------------------------------------------------------------------------
 
 function ProtectionComparison({
@@ -170,12 +196,37 @@ function ProtectionComparison({
           {formatCentsUsd(liquidationPriceUsd)} liquidation
         </div>
         <div style={bodyStyle}>
-          One liquidation price. Below it, the risk system sells for you in real time — amounts
-          and timing are decided in the moment, not fixed in advance.
+          One liquidation price. Below it, the risk engine sells for you in real time — amounts
+          and timing decided in the moment. This is what actually manages your position.
         </div>
       </div>
       <div style={{ ...cardStyle, borderColor: 'rgba(91,156,245,0.35)' }}>
-        <div style={{ ...headStyle, color: DEBT_CLEAR_COLOR }}>Scheduled (this quote)</div>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'baseline',
+            gap: 6,
+            flexWrap: 'wrap',
+          }}
+        >
+          <div style={{ ...headStyle, color: DEBT_CLEAR_COLOR }}>Scheduled (shadow preview)</div>
+          <span
+            style={{
+              fontSize: 8,
+              fontWeight: 600,
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+              color: DEBT_CLEAR_COLOR,
+              border: '1px solid rgba(91,156,245,0.4)',
+              padding: '1px 5px',
+              whiteSpace: 'nowrap',
+              marginBottom: 6,
+            }}
+          >
+            shadow — not yet executing
+          </span>
+        </div>
         <div
           style={{
             fontSize: 15,
@@ -193,10 +244,13 @@ function ProtectionComparison({
           )}
         </div>
         <div style={bodyStyle}>
-          Only the pre-committed slices below ever fire, plus a final debt-clear exit at{' '}
-          <span style={{ color: DEBT_CLEAR_COLOR }}>{formatCentsUsd(schedule.debtClearPriceUsd)}</span>
-          . Backed by a ${walkthrough ? walkthrough.safetyDepositUsd.toFixed(2) : schedule.safetyDepositRequiredUsd}{' '}
-          refundable deposit — you see every sale before you commit.
+          A preview of the proposed mechanism, computed automatically for every eligible quote
+          and run in shadow alongside the engine. Only the pre-committed slices below would
+          ever fire, plus a debt-clear exit at most{' '}
+          <span style={{ color: DEBT_CLEAR_COLOR }}>{formatCentsUsd(schedule.debtClearPriceUsd)}</span>{' '}
+          (the line falls as steps repay). Would be backed by a $
+          {walkthrough ? walkthrough.safetyDepositUsd.toFixed(2) : schedule.safetyDepositRequiredUsd}{' '}
+          refundable deposit — every sale visible before it could ever happen.
         </div>
       </div>
     </div>
@@ -229,20 +283,24 @@ function PlanSummary({
         color: 'var(--text-muted)',
       }}
     >
-      You put in <strong style={{ color: 'var(--text)' }}>${basis.collateralUsd.toFixed(2)}</strong>{' '}
-      + a <strong style={{ color: 'var(--text)' }}>${walkthrough.safetyDepositUsd.toFixed(2)}</strong>{' '}
+      Under this plan you'd put in{' '}
+      <strong style={{ color: 'var(--text)' }}>${basis.collateralUsd.toFixed(2)}</strong> + a{' '}
+      <strong style={{ color: 'var(--text)' }}>${walkthrough.safetyDepositUsd.toFixed(2)}</strong>{' '}
       refundable deposit and control{' '}
       <strong style={{ color: 'var(--text)' }}>${basis.notionalUsd.toFixed(2)}</strong> {positionPhrase} at{' '}
       <strong style={{ color: 'var(--text)' }}>{formatCentsUsd(basis.entryPriceUsd)}</strong>. Nothing
       happens above{' '}
       <strong style={{ color: 'var(--text)' }}>{formatCentsUsd(walkthrough.quietZoneFloorUsd)}</strong>{' '}
-      (your quiet zone). If the price falls, we sell small pre-set slices at the{' '}
+      (your quiet zone). If the price falls, the plan sells small pre-set slices at the{' '}
       {schedule.steps.length} printed prices below — first at{' '}
       <strong style={{ color: 'var(--text)' }}>{formatCentsUsd(firstStep.triggerPriceUsd)}</strong>{' '}
-      ({(firstStep.sellFractionBps / BPS_PER_PCT).toFixed(0)}% of the position). If it ever reaches{' '}
-      <strong style={{ color: DEBT_CLEAR_COLOR }}>{formatCentsUsd(walkthrough.debtClearPriceUsd)}</strong>{' '}
-      we sell just enough to repay the loan entirely. Worst case you lose your collateral; the
-      deposit comes back unless a crash gaps past the exit line.
+      ({(firstStep.sellFractionBps / BPS_PER_PCT).toFixed(0)}% of the position). A debt-clear exit
+      sells just enough to repay the loan entirely at{' '}
+      <strong style={{ color: DEBT_CLEAR_COLOR }}>
+        at most {formatCentsUsd(walkthrough.debtClearPriceUsd)}
+      </strong>{' '}
+      — each slice repays part of the loan, so the exit line falls as steps fire. Worst case you
+      lose your collateral; the deposit comes back unless a crash gaps past the exit line.
     </p>
   )
 }
@@ -362,9 +420,9 @@ function WalkthroughTable({
         <span style={{ color: DEBT_CLEAR_COLOR }}>$0.00</span>
       </div>
       <div style={{ padding: '2px 8px 0', fontSize: 9, color: DEBT_CLEAR_COLOR, opacity: 0.8 }}>
-        Debt-clear exit — fires the moment the price touches{' '}
-        {formatCentsUsd(walkthrough.debtClearPriceUsd)}, selling just enough to repay the loan in
-        full.
+        Debt-clear exit (at most {formatCentsUsd(walkthrough.debtClearPriceUsd)} — falls as steps
+        repay) — sells just enough to repay the loan in full the moment the live exit line is
+        touched. The printed price is the at-entry worst case.
       </div>
 
       {schedule.timeTrims?.map((trim) => (
@@ -565,11 +623,23 @@ function ScrubNarration({
         {' '}Next:{' '}
         {state.nextEventKind === 'debt-clear' ? (
           <span style={{ color: DEBT_CLEAR_COLOR }}>
-            debt-clear exit at {formatCentsUsd(state.nextEventPriceUsd)}
+            debt-clear exit at {formatCentsUsd(state.nextEventPriceUsd)} at the latest
           </span>
         ) : (
           <>step at {formatCentsUsd(state.nextEventPriceUsd)}</>
         )}
+        .
+      </>
+    ) : null
+  // The printed debt-clear price is the at-entry worst case; once slices have
+  // repaid part of the loan the live exit line sits below it.
+  const exitLineNote =
+    state.firedStepCount > 0 && !state.debtClearFired ? (
+      <>
+        {' '}The repayments so far have pulled the{' '}
+        <span style={{ color: DEBT_CLEAR_COLOR }}>
+          exit line now below {formatCentsUsd(walkthrough.debtClearPriceUsd)}
+        </span>
         .
       </>
     ) : null
@@ -606,6 +676,7 @@ function ScrubNarration({
       <strong style={{ color: 'var(--text)' }}>{holdPct}%</strong> of your tokens ({tokens} of{' '}
       {totalTokens}), loan down to{' '}
       <strong style={{ color: 'var(--text)' }}>${state.loanRemainingUsd.toFixed(2)}</strong>.
+      {exitLineNote}
       {nextEvent}
     </>
   )

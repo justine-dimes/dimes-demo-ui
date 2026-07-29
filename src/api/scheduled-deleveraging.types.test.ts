@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getDeleverageSchedule } from './scheduled-deleveraging.types'
+import { getDeleverageSchedule, getShadowDeleverage } from './scheduled-deleveraging.types'
 
 // Real ApiDeleverageSchedule captured from a local API offer (tennis market,
 // entry 5100 pips, 2x leverage, $250 collateral), camelized exactly as the
@@ -78,5 +78,115 @@ describe('getDeleverageSchedule', () => {
         deleverageSchedule: { ...realWireSchedule, steps: [{ stepIndex: 0 }] },
       }),
     ).toBeNull()
+  })
+})
+
+// Wire shape of the position DTO's shadowDeleverage field, SDK-camelized:
+// two fired schedule steps plus the debt-clear (stepIndex -1), and a
+// settlement summary. Values match the tennis schedule above.
+const wireShadowDeleverage = {
+  steps: [
+    {
+      stepIndex: 0,
+      triggerKind: 'scheduleStep',
+      triggerPriceUsdPips: '3600',
+      shadowRecordedBidUsdPips: '3580',
+      tokenUnitsToSellTarget: '137650000',
+      triggeredAt: '2026-07-28T18:04:12.000Z',
+    },
+    {
+      stepIndex: -1,
+      triggerKind: 'debtClear',
+      triggerPriceUsdPips: '2750',
+      shadowRecordedBidUsdPips: '2731',
+      tokenUnitsToSellTarget: '398810000',
+      triggeredAt: '2026-07-28T19:40:03.000Z',
+    },
+  ],
+  settlement: {
+    shadowStepsFired: 2,
+    shadowEstimatedEndValueUsdcUnits: '203450000',
+    engineEndValueUsdcUnits: '187120000',
+    shadowSummaryComputedAt: '2026-07-28T20:00:00.000Z',
+  },
+}
+
+describe('getShadowDeleverage', () => {
+  it('parses fired steps and the settlement summary into USD view models', () => {
+    const view = getShadowDeleverage({ shadowDeleverage: wireShadowDeleverage })
+
+    expect(view).not.toBeNull()
+    expect(view!.steps).toHaveLength(2)
+    expect(view!.steps[0]).toEqual({
+      stepIndex: 0,
+      triggerKind: 'scheduleStep',
+      triggerPriceUsd: '0.3600',
+      shadowRecordedBidUsd: '0.3580',
+      tokensToSellTarget: 137.65,
+      triggeredAt: '2026-07-28T18:04:12.000Z',
+    })
+    expect(view!.steps[1].stepIndex).toBe(-1)
+    expect(view!.steps[1].triggerKind).toBe('debtClear')
+    expect(view!.steps[1].tokensToSellTarget).toBeCloseTo(398.81, 10)
+    expect(view!.settlement).toEqual({
+      shadowStepsFired: 2,
+      shadowEstimatedEndValueUsd: '203.45',
+      engineEndValueUsd: '187.12',
+      shadowSummaryComputedAt: '2026-07-28T20:00:00.000Z',
+    })
+  })
+
+  it('parses a shadow record with no fired steps and no settlement yet', () => {
+    const view = getShadowDeleverage({
+      shadowDeleverage: { steps: [], settlement: null },
+    })
+
+    expect(view).toEqual({ steps: [], settlement: null })
+  })
+
+  it('returns null when the field is absent', () => {
+    expect(getShadowDeleverage({})).toBeNull()
+  })
+
+  it('returns null for a malformed step', () => {
+    expect(
+      getShadowDeleverage({
+        shadowDeleverage: {
+          ...wireShadowDeleverage,
+          steps: [{ stepIndex: 0, triggerKind: 'scheduleStep' }],
+        },
+      }),
+    ).toBeNull()
+  })
+
+  it('returns null when a present settlement is malformed', () => {
+    expect(
+      getShadowDeleverage({
+        shadowDeleverage: {
+          ...wireShadowDeleverage,
+          settlement: { shadowStepsFired: 2 },
+        },
+      }),
+    ).toBeNull()
+  })
+})
+
+describe('QA mock fallback', () => {
+  it('serves the sample schedule and shadow record only while the session flag is set', () => {
+    window.sessionStorage.setItem('dimes.mockDeleverageSchedule', '1')
+    try {
+      const schedule = getDeleverageSchedule({})
+      const shadow = getShadowDeleverage({})
+      expect(schedule).not.toBeNull()
+      expect(shadow).not.toBeNull()
+      expect(shadow!.steps).toHaveLength(2)
+      expect(shadow!.steps.map((s) => s.triggerPriceUsd)).toEqual(
+        schedule!.steps.slice(0, 2).map((s) => s.triggerPriceUsd),
+      )
+      expect(shadow!.settlement!.shadowStepsFired).toBe(2)
+    } finally {
+      window.sessionStorage.removeItem('dimes.mockDeleverageSchedule')
+    }
+    expect(getShadowDeleverage({})).toBeNull()
   })
 })

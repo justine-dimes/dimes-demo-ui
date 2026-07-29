@@ -1,7 +1,7 @@
-import { useCallback, useState } from 'react'
 import type { DeleverageScheduleView } from '../api/scheduled-deleveraging.types'
 import type { ScheduleWalkthrough } from '../utils/deleverageSchedule'
 import { formatCentsUsd, scheduleStateAtPrice } from '../utils/deleverageSchedule'
+import { useMeasuredWidth } from './useMeasuredWidth'
 
 export type ScheduleHoverKey = number | 'debt-clear' | null
 
@@ -29,21 +29,6 @@ interface StaircaseDrop {
   priceUsd: number
   remainingBefore: number
   remainingAfter: number
-}
-
-function useMeasuredWidth(initial: number) {
-  const [width, setWidth] = useState(initial)
-  const measureRef = useCallback((node: HTMLDivElement | null) => {
-    if (!node) return
-    const ro = new ResizeObserver((entries) => {
-      const w = entries[0]?.contentRect.width
-      if (w) setWidth(w)
-    })
-    ro.observe(node)
-    setWidth(node.getBoundingClientRect().width || initial)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `initial` is a constant default, not a reactive input
-  }, [])
-  return { width, measureRef }
 }
 
 function priceDomain(
@@ -103,6 +88,7 @@ export function DeleverageScheduleCharts({
   scrubPriceUsd,
   hoverKey,
   onHoverKey,
+  shadowFiredKeys,
 }: {
   schedule: DeleverageScheduleView
   walkthrough: ScheduleWalkthrough | null
@@ -110,6 +96,7 @@ export function DeleverageScheduleCharts({
   scrubPriceUsd: number | null
   hoverKey: ScheduleHoverKey
   onHoverKey: (key: ScheduleHoverKey) => void
+  shadowFiredKeys?: ReadonlySet<string>
 }) {
   const entryPriceUsd = walkthrough?.basis.entryPriceUsd ?? null
   const domain = priceDomain(schedule, entryPriceUsd, currentPriceUsd)
@@ -132,6 +119,7 @@ export function DeleverageScheduleCharts({
         scrubPriceUsd={scrubPriceUsd}
         hoverKey={hoverKey}
         onHoverKey={onHoverKey}
+        shadowFiredKeys={shadowFiredKeys}
       />
       <RemainingStaircaseChart
         drops={drops}
@@ -146,7 +134,7 @@ export function DeleverageScheduleCharts({
   )
 }
 
-function ChartFrame({
+export function ChartFrame({
   title,
   measureRef,
   children,
@@ -191,6 +179,9 @@ interface AxisLabel {
   priority: number
 }
 
+// `shadowFiredKeys` marks lines the shadow run has already fired: trigger
+// prices (the 4-decimal USD strings) plus 'debt-clear'. Keying on price, not
+// stepIndex, because the wire's stepIndex numbering interleaves time trims.
 function LadderChart({
   schedule,
   domain,
@@ -199,6 +190,7 @@ function LadderChart({
   scrubPriceUsd,
   hoverKey,
   onHoverKey,
+  shadowFiredKeys,
 }: {
   schedule: DeleverageScheduleView
   domain: { max: number; min: number }
@@ -207,6 +199,7 @@ function LadderChart({
   scrubPriceUsd: number | null
   hoverKey: ScheduleHoverKey
   onHoverKey: (key: ScheduleHoverKey) => void
+  shadowFiredKeys?: ReadonlySet<string>
 }) {
   const { width, measureRef } = useMeasuredWidth(300)
   const chartW = width - PAD_LEFT - PAD_RIGHT
@@ -294,6 +287,7 @@ function LadderChart({
           const sy = toY(parseFloat(step.triggerPriceUsd))
           const isHovered = hoverKey === step.stepIndex
           const isCheckpoint = step.sellFractionBps === 0
+          const isShadowFired = shadowFiredKeys?.has(step.triggerPriceUsd) ?? false
           return (
             <g key={step.stepIndex}>
               <line
@@ -309,15 +303,28 @@ function LadderChart({
                 }
                 strokeDasharray={isCheckpoint ? '2 3' : undefined}
               />
+              {isShadowFired && (
+                <circle
+                  cx={PAD_LEFT + 7}
+                  cy={sy}
+                  r={3}
+                  fill={DEBT_CLEAR_COLOR}
+                  stroke="rgba(12,12,12,0.9)"
+                  strokeWidth={1}
+                />
+              )}
               <text
                 x={PAD_LEFT + chartW + 4}
                 y={sy + 3}
                 textAnchor="start"
                 fontSize={9}
                 fontFamily="var(--font)"
-                fill={isHovered ? HOVER_COLOR : 'var(--text-muted)'}
+                fill={
+                  isHovered ? HOVER_COLOR : isShadowFired ? DEBT_CLEAR_COLOR : 'var(--text-muted)'
+                }
               >
                 {isCheckpoint ? '–' : `sell ${(step.sellFractionBps / 100).toFixed(0)}%`}
+                {isShadowFired ? ' ✓' : ''}
               </text>
             </g>
           )
@@ -349,7 +356,8 @@ function LadderChart({
           />
         )}
 
-        {/* Debt-clear exit — emphasized */}
+        {/* Debt-clear exit — emphasized. The printed line is the at-entry
+            worst case; the live line falls as steps repay, hence "max". */}
         <g>
           <line
             x1={PAD_LEFT}
@@ -360,6 +368,16 @@ function LadderChart({
             strokeWidth={hoverKey === 'debt-clear' ? 2.5 : 1.75}
             strokeDasharray="6 3"
           />
+          {(shadowFiredKeys?.has('debt-clear') ?? false) && (
+            <circle
+              cx={PAD_LEFT + 7}
+              cy={toY(debtClearPrice)}
+              r={3}
+              fill={DEBT_CLEAR_COLOR}
+              stroke="rgba(12,12,12,0.9)"
+              strokeWidth={1}
+            />
+          )}
           <text
             x={PAD_LEFT + chartW + 4}
             y={toY(debtClearPrice) + 3}
@@ -368,7 +386,7 @@ function LadderChart({
             fontFamily="var(--font)"
             fill={DEBT_CLEAR_COLOR}
           >
-            exit
+            {(shadowFiredKeys?.has('debt-clear') ?? false) ? 'max exit ✓' : 'max exit'}
           </text>
         </g>
 
@@ -411,6 +429,11 @@ function LadderChart({
           style={{ cursor: 'crosshair' }}
         />
       </svg>
+      {shadowFiredKeys != null && shadowFiredKeys.size > 0 && (
+        <div style={{ marginTop: 4, fontSize: 9, color: DEBT_CLEAR_COLOR, opacity: 0.85 }}>
+          ✓ fired in shadow — recorded, not executed
+        </div>
+      )}
     </ChartFrame>
   )
 }

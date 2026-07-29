@@ -117,8 +117,6 @@ export function QuoteDetails({
         value={`$${offer.currentLiquidationPriceUsd}`}
         valueColor="#F5A623"
         previousValue={prev ? `$${prev.currentLiquidationPriceUsd}` : undefined}
-        chip={deleverageSchedule ? 'superseded by schedule' : undefined}
-        deemphasized={deleverageSchedule != null}
       />
       {offer.allowPartialFill && (
         <StatRow

@@ -11,12 +11,23 @@ import type { DeleverageScheduleView } from '../api/scheduled-deleveraging.types
 //   accrued fees are not modelled.
 // - The debt-clear exit sells just enough tokens at its trigger price to repay
 //   whatever loan is still outstanding, capped at the tokens still held.
+// - The printed debt-clear price is the AT-ENTRY worst case: it is the price
+//   at which selling the whole remaining position exactly repays the loan as
+//   sized at entry. Every step that fires repays part of the loan, which
+//   moves the real exit line BELOW the printed one. This is why the API
+//   prints steps below the debt-clear price — they are reachable, because by
+//   the time the price gets there the live exit line has fallen under them.
+// - Simplification: this module replays the plan against the printed line
+//   only (it does not re-derive the moving line per fired step), so
+//   `scheduleStateAtPrice` treats the printed price as the latest the exit
+//   can fire — an upper bound. Copy built on it must present the printed
+//   value as "at most X — falls as steps repay".
 // - `scheduleStateAtPrice` replays the plan for a price sweep: every printed
 //   step whose trigger is at or above the probed price has fired (in printed
 //   order), then the debt-clear exit fires if the price is at or below its
-//   line. The printed debt-clear price can sit inside the ladder (the API
-//   emits schedules where it does), so the exit is applied the moment the
-//   sweep crosses it rather than only after the last slice.
+//   line. The printed debt-clear price can sit inside the ladder (see above),
+//   so the exit is applied the moment the sweep crosses it rather than only
+//   after the last slice.
 // ---------------------------------------------------------------------------
 
 const BPS_PER_UNIT = 10_000;

@@ -22,7 +22,7 @@ import { ErrorBanner } from './ErrorBanner'
 import { StatRow } from './StatRow'
 import { StatGroup, PnlHero } from './CardViewParts'
 import { LeverageChart } from './LeverageChart'
-import { getDeleverageSchedule } from '../api/scheduled-deleveraging.types'
+import { getDeleverageSchedule, getShadowDeleverage } from '../api/scheduled-deleveraging.types'
 import { ScheduledDeleveragingPanel } from './ScheduledDeleveragingPanel'
 import { PositionIdRow } from './PositionCard'
 import { useCopyFlash } from '../hooks/useCopyFlash'
@@ -344,6 +344,7 @@ function OpenPositionDetail({
   const isFullyDeleveraged = position.current.bookLeverageBps <= 10000
 
   const deleverageSchedule = getDeleverageSchedule(position)
+  const shadowDeleverage = getShadowDeleverage(position)
 
   const currentPrice = parseFloat(position.current.markPriceUsd)
   const liquidationPrice = parseFloat(position.risk.currentLiquidationPriceUsd)
@@ -469,8 +470,6 @@ function OpenPositionDetail({
                 label="Liquidation Price"
                 value={`$${position.risk.currentLiquidationPriceUsd}`}
                 valueColor="#F5A623"
-                chip={deleverageSchedule ? 'superseded by schedule' : undefined}
-                deemphasized={deleverageSchedule != null}
               />
               <StatRow label="Distance to liquidation" value={distancePctDisplay} />
             </>
@@ -612,6 +611,8 @@ function OpenPositionDetail({
             }}
             side={position.side === 'no' ? 'no' : 'yes'}
             currentPriceUsd={position.current.markPriceUsd}
+            shadowDeleverage={shadowDeleverage}
+            unwinds={unwinds}
           />
         )}
 

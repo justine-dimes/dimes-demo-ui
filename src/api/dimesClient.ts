@@ -1,9 +1,4 @@
-import {
-  DimesClient,
-  type AuthProvider,
-  type CreateQuoteParams,
-  type Quote,
-} from '@dimes-dot-fi/sdk';
+import { DimesClient, type AuthProvider } from '@dimes-dot-fi/sdk';
 import { useAuthStore } from '../store/auth';
 import { getApiBase } from '../runtimeConfig';
 import { requestAuthToken } from './auth';
@@ -34,38 +29,14 @@ class StoreAuth implements AuthProvider {
   }
 }
 
-// Scheduled-deleveraging preview opt-in. The trade panel writes this right
-// before requesting a quote; while set, every draft/quote request carries
-// `use_scheduled_deleverage: true` (the SDK decamelizes request bodies). The
-// API field is being added in parallel — sending it is harmless if ignored.
-// A request-layer flag (rather than a param) because the SDK's quote machine
-// rebuilds `CreateQuoteParams` internally and would drop unknown fields.
-let scheduledDeleverageOptIn = false;
-
-export function setScheduledDeleverageOptIn(enabled: boolean): void {
-  scheduledDeleverageOptIn = enabled;
-}
-
-function withScheduledDeleverage(params: CreateQuoteParams): CreateQuoteParams {
-  if (!scheduledDeleverageOptIn) return params;
-  return { ...params, useScheduledDeleverage: true } as CreateQuoteParams;
-}
-
-class DemoDimesClient extends DimesClient {
-  override createDraftQuote(params: CreateQuoteParams): Promise<Quote> {
-    return super.createDraftQuote(withScheduledDeleverage(params));
-  }
-
-  override createQuote(params: CreateQuoteParams): Promise<Quote> {
-    return super.createQuote(withScheduledDeleverage(params));
-  }
-}
-
+// Shadow-mode pivot: the API computes and returns `deleverageSchedule` on
+// every eligible draft quote automatically — no request field, no opt-in, and
+// no client subclass. Quote requests go through the stock SDK client.
 let client: DimesClient | null = null;
 
 export function getDimesClient(): DimesClient {
   if (!client) {
-    client = new DemoDimesClient({ baseUrl: getApiBase(), auth: new StoreAuth() });
+    client = new DimesClient({ baseUrl: getApiBase(), auth: new StoreAuth() });
   }
   return client;
 }

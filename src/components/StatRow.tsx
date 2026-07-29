@@ -4,16 +4,12 @@ export function StatRow({
   valueColor,
   previousValue,
   nested,
-  chip,
-  deemphasized,
 }: {
   label: string
   value: string
   valueColor?: string
   previousValue?: string
   nested?: boolean
-  chip?: string
-  deemphasized?: boolean
 }) {
   const changed = previousValue !== undefined && previousValue !== value
   const basePadLeft = nested ? 16 : 0
@@ -59,22 +55,6 @@ export function StatRow({
       {changed && (
         <span className="stat-row-diff-in" style={{ color: 'var(--text-dim)', fontSize: 11, animationDelay: '60ms' }}>→</span>
       )}
-      {chip && (
-        <span
-          style={{
-            fontSize: 9,
-            fontWeight: 600,
-            letterSpacing: '0.06em',
-            textTransform: 'uppercase',
-            color: 'var(--text-muted)',
-            border: '1px solid rgba(255,255,255,0.14)',
-            padding: '1px 5px',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {chip}
-        </span>
-      )}
       <span
         className={changed ? 'stat-row-diff-in' : undefined}
         style={{
@@ -83,7 +63,6 @@ export function StatRow({
           fontWeight: 500,
           whiteSpace: 'nowrap',
           transition: 'color 0.3s ease',
-          ...(deemphasized ? { opacity: 0.45, textDecoration: 'line-through', textDecorationColor: 'rgba(255,255,255,0.35)' } : {}),
           ...(changed ? { animationDelay: '120ms' } : {}),
         }}
       >
