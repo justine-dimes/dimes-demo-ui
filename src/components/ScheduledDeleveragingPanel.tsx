@@ -14,6 +14,7 @@ import {
   formatCentsUsd,
   parseScheduleBasis,
   scheduleStateAtPrice,
+  simulateScheduleEvents,
 } from '../utils/deleverageSchedule'
 import { StatRow } from './StatRow'
 import { StatGroup } from './CardViewParts'
@@ -197,7 +198,9 @@ function ProtectionComparison({
         </div>
         <div style={bodyStyle}>
           One liquidation price. Below it, the risk engine sells for you in real time — amounts
-          and timing decided in the moment. This is what actually manages your position.
+          and timing decided in the moment. This is what actually manages your position. Its
+          price includes the engine&apos;s maintenance and slippage buffers, and assumes your
+          collateral only.
         </div>
       </div>
       <div style={{ ...cardStyle, borderColor: 'rgba(91,156,245,0.35)' }}>
@@ -250,7 +253,9 @@ function ProtectionComparison({
           <span style={{ color: DEBT_CLEAR_COLOR }}>{formatCentsUsd(schedule.debtClearPriceUsd)}</span>{' '}
           (the line falls as steps repay). Would be backed by a $
           {walkthrough ? walkthrough.safetyDepositUsd.toFixed(2) : schedule.safetyDepositRequiredUsd}{' '}
-          refundable deposit — every sale visible before it could ever happen.
+          refundable deposit — the deeper lines are safe to promise <em>because</em> of that
+          deposit; the standard liquidation price at left assumes collateral only. Every sale
+          visible before it could ever happen.
         </div>
       </div>
     </div>
@@ -273,6 +278,12 @@ function PlanSummary({
   const { basis } = walkthrough
   const firstStep = schedule.steps[0]
   const positionPhrase = side != null ? `of ${side.toUpperCase()}` : 'of the position'
+  const spacings = walkthrough.stepRows
+    .map((row) => row.spacingUsd)
+    .filter((gap): gap is number => gap != null)
+    .sort((a, b) => a - b)
+  const medianSpacingUsd = spacings.length > 0 ? spacings[Math.floor(spacings.length / 2)] : null
+  const maxSellPct = Math.max(...schedule.steps.map((s) => s.sellFractionBps)) / BPS_PER_PCT
 
   return (
     <p
@@ -299,8 +310,18 @@ function PlanSummary({
       <strong style={{ color: DEBT_CLEAR_COLOR }}>
         at most {formatCentsUsd(walkthrough.debtClearPriceUsd)}
       </strong>{' '}
-      — each slice repays part of the loan, so the exit line falls as steps fire. Worst case you
-      lose your collateral; the deposit comes back unless a crash gaps past the exit line.
+      — each slice repays part of the loan, so the exit line falls as steps fire.
+      {medianSpacingUsd != null && (
+        <>
+          {' '}
+          Steps sit about{' '}
+          <strong style={{ color: 'var(--text)' }}>{formatCentsUsd(medianSpacingUsd)}</strong> apart
+          (spacing is set per market; no step sells more than {maxSellPct.toFixed(0)}% of what you
+          still hold).
+        </>
+      )}{' '}
+      Worst case you lose your collateral; the deposit comes back unless a crash gaps past the
+      exit line.
     </p>
   )
 }
@@ -323,6 +344,13 @@ function WalkthroughTable({
   onHoverKey: (key: ScheduleHoverKey) => void
 }) {
   if (!walkthrough) return <SimpleStepTable steps={schedule.steps} />
+
+  const simulatedEvents = simulateScheduleEvents(walkthrough)
+  const simulatedExit = simulatedEvents.find((event) => event.kind === 'debt-clear')
+  const firedStepIndexes = new Set(
+    simulatedEvents.filter((e) => e.kind === 'step').map((e) => e.stepIndex),
+  )
+  const hasUnreachedSteps = walkthrough.stepRows.some((row) => !firedStepIndexes.has(row.stepIndex))
 
   const rowStyle = (key: ScheduleHoverKey) =>
     ({
@@ -366,7 +394,11 @@ function WalkthroughTable({
       {walkthrough.stepRows.map((row) => (
         <div
           key={row.stepIndex}
-          style={{ ...rowStyle(row.stepIndex), ...cellFont }}
+          style={{
+            ...rowStyle(row.stepIndex),
+            ...cellFont,
+            opacity: firedStepIndexes.has(row.stepIndex) ? 1 : 0.45,
+          }}
           onMouseEnter={() => onHoverKey(row.stepIndex)}
           onMouseLeave={() => onHoverKey(null)}
         >
@@ -423,7 +455,16 @@ function WalkthroughTable({
         Debt-clear exit (at most {formatCentsUsd(walkthrough.debtClearPriceUsd)} — falls as steps
         repay) — sells just enough to repay the loan in full the moment the live exit line is
         touched. The printed price is the at-entry worst case.
+        {simulatedExit != null && (
+          <> On a straight decline it fires at ≈{formatCentsUsd(simulatedExit.priceUsd)}.</>
+        )}
       </div>
+      {hasUnreachedSteps && (
+        <div style={{ padding: '2px 8px 0', fontSize: 9, color: 'var(--text-dim)' }}>
+          Dimmed steps sit below where the exit would fire on a straight decline — they can only
+          fire on paths where earlier sales and recoveries pull the exit line down first.
+        </div>
+      )}
 
       {schedule.timeTrims?.map((trim) => (
         <div
@@ -631,15 +672,16 @@ function ScrubNarration({
         .
       </>
     ) : null
-  // The printed debt-clear price is the at-entry worst case; once slices have
-  // repaid part of the loan the live exit line sits below it.
   const exitLineNote =
-    state.firedStepCount > 0 && !state.debtClearFired ? (
+    !state.debtClearFired && state.currentDebtClearLineUsd != null ? (
       <>
-        {' '}The repayments so far have pulled the{' '}
+        {' '}The live{' '}
         <span style={{ color: DEBT_CLEAR_COLOR }}>
-          exit line now below {formatCentsUsd(walkthrough.debtClearPriceUsd)}
+          exit line is now ≈{formatCentsUsd(state.currentDebtClearLineUsd)}
         </span>
+        {state.firedStepCount > 0 && (
+          <> (down from the printed {formatCentsUsd(walkthrough.debtClearPriceUsd)})</>
+        )}
         .
       </>
     ) : null

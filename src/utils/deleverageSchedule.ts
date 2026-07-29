@@ -14,20 +14,20 @@ import type { DeleverageScheduleView } from '../api/scheduled-deleveraging.types
 // - The printed debt-clear price is the AT-ENTRY worst case: it is the price
 //   at which selling the whole remaining position exactly repays the loan as
 //   sized at entry. Every step that fires repays part of the loan, which
-//   moves the real exit line BELOW the printed one. This is why the API
-//   prints steps below the debt-clear price — they are reachable, because by
-//   the time the price gets there the live exit line has fallen under them.
-// - Simplification: this module replays the plan against the printed line
-//   only (it does not re-derive the moving line per fired step), so
-//   `scheduleStateAtPrice` treats the printed price as the latest the exit
-//   can fire — an upper bound. Copy built on it must present the printed
-//   value as "at most X — falls as steps repay".
-// - `scheduleStateAtPrice` replays the plan for a price sweep: every printed
-//   step whose trigger is at or above the probed price has fired (in printed
-//   order), then the debt-clear exit fires if the price is at or below its
-//   line. The printed debt-clear price can sit inside the ladder (see above),
-//   so the exit is applied the moment the sweep crosses it rather than only
-//   after the last slice.
+//   moves the LIVE exit line below the printed one: line = remainingLoan /
+//   (remainingTokens × (1 − haircut(band))), mirroring the API's haircutBands
+//   live-config. `simulateScheduleEvents` replays a straight decline against
+//   that MOVING line: a printed step fires while its trigger still sits above
+//   the live line; the moment the sweep reaches the live line, the exit fires
+//   (selling just enough to repay the remaining loan) and no further forced
+//   sales happen — remaining tokens ride
+//   loan-free. At high leverage the live line starts near the first steps and
+//   falls only slightly per sale, so the exit dominates early and deep
+//   printed steps never fire on a straight decline; at low leverage the
+//   ladder runs far ahead of the line and most steps fire first.
+// - `scheduleStateAtPrice` reads that same event simulation at a probed
+//   price, so the staircase chart, the what-if scrubber, and the narration
+//   all agree with each other and with the mechanism.
 // ---------------------------------------------------------------------------
 
 const BPS_PER_UNIT = 10_000;
@@ -88,8 +88,40 @@ export interface ScheduleStateAtPrice {
   remainingFraction: number;
   tokensRemaining: number;
   loanRemainingUsd: number;
+  currentDebtClearLineUsd: number | null;
   nextEventPriceUsd: number | null;
   nextEventKind: 'step' | 'debt-clear' | null;
+}
+
+export interface ScheduleEvent {
+  kind: 'step' | 'debt-clear';
+  stepIndex: number | null;
+  priceUsd: number;
+  tokensSold: number;
+  remainingFractionAfter: number;
+  loanAfterUsd: number;
+  lineAfterUsd: number | null;
+}
+
+// Mirrors the API's haircutBands live-config (spread + slippage per price band).
+const HAIRCUT_BANDS = [
+  { floorUsd: 0.5, ceilingUsd: Number.POSITIVE_INFINITY, haircut: 0.03 },
+  { floorUsd: 0.2, ceilingUsd: 0.5, haircut: 0.08 },
+  { floorUsd: 0, ceilingUsd: 0.2, haircut: 0.14 },
+] as const;
+
+export function solveDebtClearLineUsd(loanUsd: number, tokensHeld: number): number | null {
+  if (loanUsd <= 0 || tokensHeld <= 0) return null;
+  let deepestBandCandidate: number | null = null;
+  for (const band of HAIRCUT_BANDS) {
+    const candidate = loanUsd / (tokensHeld * (1 - band.haircut));
+    const isConsistentWithBand = candidate >= band.floorUsd && candidate < band.ceilingUsd;
+    if (isConsistentWithBand) return candidate;
+    deepestBandCandidate = candidate;
+  }
+  // Band-boundary gap: fall back to the deepest band's (highest, most
+  // conservative) estimate so the exit never renders later than it could fire.
+  return deepestBandCandidate;
 }
 
 export function parseScheduleBasis(input: ScheduleBasisInput): ScheduleBasis | null {
@@ -176,48 +208,91 @@ export function buildScheduleWalkthrough(
   return { basis, quietZoneFloorUsd, debtClearPriceUsd, safetyDepositUsd, stepRows, debtClear };
 }
 
+export function simulateScheduleEvents(walkthrough: ScheduleWalkthrough): ScheduleEvent[] {
+  const { basis, stepRows } = walkthrough;
+  const events: ScheduleEvent[] = [];
+  let remainingFraction = 1;
+  let loanUsd = basis.loanUsd;
+  let lineUsd = solveDebtClearLineUsd(loanUsd, basis.positionTokens);
+
+  const fireDebtClear = (atPriceUsd: number) => {
+    const tokensHeld = basis.positionTokens * remainingFraction;
+    const tokensSold = atPriceUsd > 0 ? Math.min(loanUsd / atPriceUsd, tokensHeld) : 0;
+    loanUsd = Math.max(0, loanUsd - tokensSold * atPriceUsd);
+    remainingFraction =
+      basis.positionTokens > 0 ? (tokensHeld - tokensSold) / basis.positionTokens : 0;
+    events.push({
+      kind: 'debt-clear',
+      stepIndex: null,
+      priceUsd: atPriceUsd,
+      tokensSold,
+      remainingFractionAfter: remainingFraction,
+      loanAfterUsd: loanUsd,
+      lineAfterUsd: null,
+    });
+  };
+
+  for (const row of stepRows) {
+    const sweepHitsLineFirst = lineUsd != null && lineUsd > row.triggerPriceUsd;
+    if (sweepHitsLineFirst) {
+      fireDebtClear(lineUsd as number);
+      return events;
+    }
+    const sellFraction = row.sellFractionBps / BPS_PER_UNIT;
+    const tokensSold = basis.positionTokens * remainingFraction * sellFraction;
+    loanUsd = Math.max(0, loanUsd - tokensSold * row.triggerPriceUsd);
+    remainingFraction *= 1 - sellFraction;
+    lineUsd = solveDebtClearLineUsd(loanUsd, basis.positionTokens * remainingFraction);
+    events.push({
+      kind: 'step',
+      stepIndex: row.stepIndex,
+      priceUsd: row.triggerPriceUsd,
+      tokensSold,
+      remainingFractionAfter: remainingFraction,
+      loanAfterUsd: loanUsd,
+      lineAfterUsd: lineUsd,
+    });
+    const sweepAlreadyBelowLine = lineUsd != null && lineUsd > row.triggerPriceUsd;
+    if (sweepAlreadyBelowLine) {
+      fireDebtClear(row.triggerPriceUsd);
+      return events;
+    }
+    const loanFullyRepaidBySteps = loanUsd <= 0;
+    if (loanFullyRepaidBySteps) {
+      // Forced sales exist to protect the loan; with the loan repaid the
+      // remaining printed steps never fire and the tokens ride loan-free.
+      return events;
+    }
+  }
+  if (lineUsd != null) fireDebtClear(lineUsd);
+  return events;
+}
+
 export function scheduleStateAtPrice(
   walkthrough: ScheduleWalkthrough,
   priceUsd: number,
 ): ScheduleStateAtPrice {
-  const { basis, stepRows, debtClearPriceUsd, quietZoneFloorUsd } = walkthrough;
+  const { basis, stepRows, quietZoneFloorUsd } = walkthrough;
+  const events = simulateScheduleEvents(walkthrough);
 
   let remainingFraction = 1;
   let loanRemainingUsd = basis.loanUsd;
+  let currentDebtClearLineUsd = solveDebtClearLineUsd(loanRemainingUsd, basis.positionTokens);
   let firedStepCount = 0;
-  let nextTriggerPriceUsd: number | null = null;
+  let debtClearFired = false;
+  let nextEvent: ScheduleEvent | null = null;
 
-  for (const row of stepRows) {
-    if (priceUsd <= row.triggerPriceUsd) {
-      const sellFraction = row.sellFractionBps / BPS_PER_UNIT;
-      const tokensSold = basis.positionTokens * remainingFraction * sellFraction;
-      loanRemainingUsd = Math.max(0, loanRemainingUsd - tokensSold * row.triggerPriceUsd);
-      remainingFraction *= 1 - sellFraction;
-      firedStepCount += 1;
-    } else if (nextTriggerPriceUsd == null) {
-      nextTriggerPriceUsd = row.triggerPriceUsd;
+  for (const event of events) {
+    if (priceUsd > event.priceUsd) {
+      nextEvent = event;
+      break;
     }
+    remainingFraction = event.remainingFractionAfter;
+    loanRemainingUsd = event.loanAfterUsd;
+    currentDebtClearLineUsd = event.lineAfterUsd;
+    if (event.kind === 'step') firedStepCount += 1;
+    else debtClearFired = true;
   }
-
-  const debtClearFired = priceUsd <= debtClearPriceUsd;
-  if (debtClearFired) {
-    const tokensHeld = basis.positionTokens * remainingFraction;
-    const tokensSold =
-      debtClearPriceUsd > 0 ? Math.min(loanRemainingUsd / debtClearPriceUsd, tokensHeld) : 0;
-    loanRemainingUsd = Math.max(0, loanRemainingUsd - tokensSold * debtClearPriceUsd);
-    remainingFraction =
-      basis.positionTokens > 0 ? (tokensHeld - tokensSold) / basis.positionTokens : 0;
-  }
-
-  const nextEventCandidates: { priceUsd: number; kind: 'step' | 'debt-clear' }[] = [];
-  if (nextTriggerPriceUsd != null) {
-    nextEventCandidates.push({ priceUsd: nextTriggerPriceUsd, kind: 'step' });
-  }
-  if (!debtClearFired) {
-    nextEventCandidates.push({ priceUsd: debtClearPriceUsd, kind: 'debt-clear' });
-  }
-  nextEventCandidates.sort((a, b) => b.priceUsd - a.priceUsd);
-  const nextEvent = nextEventCandidates[0] ?? null;
 
   return {
     priceUsd,
@@ -228,6 +303,7 @@ export function scheduleStateAtPrice(
     remainingFraction,
     tokensRemaining: basis.positionTokens * remainingFraction,
     loanRemainingUsd,
+    currentDebtClearLineUsd,
     nextEventPriceUsd: nextEvent?.priceUsd ?? null,
     nextEventKind: nextEvent?.kind ?? null,
   };

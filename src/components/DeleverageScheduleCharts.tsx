@@ -1,6 +1,6 @@
 import type { DeleverageScheduleView } from '../api/scheduled-deleveraging.types'
 import type { ScheduleWalkthrough } from '../utils/deleverageSchedule'
-import { formatCentsUsd, scheduleStateAtPrice } from '../utils/deleverageSchedule'
+import { formatCentsUsd, simulateScheduleEvents } from '../utils/deleverageSchedule'
 import { useMeasuredWidth } from './useMeasuredWidth'
 
 export type ScheduleHoverKey = number | 'debt-clear' | null
@@ -55,16 +55,15 @@ function buildStaircaseDrops(
   walkthrough: ScheduleWalkthrough | null,
 ): StaircaseDrop[] {
   if (walkthrough) {
-    const events: { key: number | 'debt-clear'; priceUsd: number }[] = walkthrough.stepRows.map(
-      (row) => ({ key: row.stepIndex, priceUsd: row.triggerPriceUsd }),
-    )
-    events.push({ key: 'debt-clear', priceUsd: walkthrough.debtClearPriceUsd })
-    events.sort((a, b) => b.priceUsd - a.priceUsd)
     let remainingBefore = 1
-    return events.map((event) => {
-      const remainingAfter = scheduleStateAtPrice(walkthrough, event.priceUsd).remainingFraction
-      const drop = { ...event, remainingBefore, remainingAfter }
-      remainingBefore = remainingAfter
+    return simulateScheduleEvents(walkthrough).map((event) => {
+      const drop: StaircaseDrop = {
+        key: event.kind === 'debt-clear' ? 'debt-clear' : (event.stepIndex ?? 0),
+        priceUsd: event.priceUsd,
+        remainingBefore,
+        remainingAfter: event.remainingFractionAfter,
+      }
+      remainingBefore = event.remainingFractionAfter
       return drop
     })
   }

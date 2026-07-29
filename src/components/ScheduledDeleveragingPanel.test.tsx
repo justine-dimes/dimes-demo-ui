@@ -141,7 +141,8 @@ describe('ScheduledDeleveragingPanel', () => {
     expect(midLadder.textContent).toContain('$169.75')
     // Fired steps have repaid part of the loan, so the live exit line has
     // moved under the printed at-entry value.
-    expect(midLadder.textContent).toContain('exit line now below 27.5¢')
+    expect(midLadder.textContent).toContain('exit line is now ≈24.6¢')
+    expect(midLadder.textContent).toContain('down from the printed 27.5¢')
     expect(midLadder.textContent).toContain('step at 30.2¢')
 
     fireEvent.change(slider, { target: { value: '0.5' } })
