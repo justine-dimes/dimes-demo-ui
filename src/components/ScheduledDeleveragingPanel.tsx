@@ -1,69 +1,401 @@
-import { useRef, useState, useCallback, useEffect } from 'react'
+import { useMemo, useState } from 'react'
 import type {
-  DeleverageScheduleStep,
   DeleverageScheduleView,
+  DeleverageScheduleStep,
 } from '../api/scheduled-deleveraging.types'
+import type {
+  ScheduleBasisInput,
+  ScheduleWalkthrough,
+} from '../utils/deleverageSchedule'
+import {
+  buildScheduleWalkthrough,
+  formatCentsUsd,
+  parseScheduleBasis,
+  scheduleStateAtPrice,
+} from '../utils/deleverageSchedule'
 import { StatRow } from './StatRow'
 import { StatGroup } from './CardViewParts'
+import {
+  DeleverageScheduleCharts,
+  DEBT_CLEAR_COLOR,
+  type ScheduleHoverKey,
+} from './DeleverageScheduleCharts'
 
-// Blue = the drawer's deleveraging accent (unwinding banner, unwind tooltips).
-const DEBT_CLEAR_COLOR = '#5B9CF5'
-const ENTRY_MARKER_COLOR = 'rgba(255,255,255,0.45)'
-const CURRENT_MARKER_COLOR = '#44FF97'
+const LIQUIDATION_COLOR = '#F5A623'
+const PCT_PER_FRACTION = 100
+const BPS_PER_PCT = 100
+
+const cellFont = {
+  fontSize: 11,
+  fontVariantNumeric: 'tabular-nums',
+  whiteSpace: 'nowrap',
+} as const
 
 export function ScheduledDeleveragingPanel({
   schedule,
-  entryPriceUsd,
+  basis,
+  side,
   currentPriceUsd,
+  liquidationPriceUsd,
+  showComparison,
   last,
 }: {
   schedule: DeleverageScheduleView
-  entryPriceUsd?: string
+  basis: ScheduleBasisInput
+  side?: 'yes' | 'no'
   currentPriceUsd?: string
+  liquidationPriceUsd?: string
+  showComparison?: boolean
   last?: boolean
 }) {
+  const walkthrough = useMemo(() => {
+    const parsed = parseScheduleBasis(basis)
+    return parsed ? buildScheduleWalkthrough(schedule, parsed) : null
+  }, [schedule, basis])
+
+  const [hoverKey, setHoverKey] = useState<ScheduleHoverKey>(null)
+
+  const currentPrice = currentPriceUsd != null ? parseFloat(currentPriceUsd) : null
+  const usableCurrentPrice =
+    currentPrice != null && Number.isFinite(currentPrice) ? currentPrice : null
+
+  const [scrubPriceUsd, setScrubPriceUsd] = useState<number | null>(null)
+
   return (
     <StatGroup label="Scheduled Deleveraging" last={last}>
-      <StatRow
-        label="Entry buffer floor"
-        value={`$${schedule.entryBufferFloorPriceUsd}`}
-      />
-      <StepTable steps={schedule.steps} />
-      <StatRow
-        label="Debt-clear exit"
-        value={`$${schedule.debtClearPriceUsd}`}
-        valueColor={DEBT_CLEAR_COLOR}
-      />
-      <StatRow
-        label="Safety deposit (refundable)"
-        value={`$${schedule.safetyDepositRequiredUsd}`}
-      />
-      {schedule.safetyDepositCollectedUsd != null && (
-        <StatRow
-          nested
-          label="Collected"
-          value={`$${schedule.safetyDepositCollectedUsd}`}
+      {showComparison && liquidationPriceUsd != null && (
+        <ProtectionComparison
+          schedule={schedule}
+          walkthrough={walkthrough}
+          liquidationPriceUsd={liquidationPriceUsd}
         />
       )}
-      {schedule.timeTrims?.map((trim) => (
+
+      {walkthrough && <PlanSummary schedule={schedule} walkthrough={walkthrough} side={side} />}
+
+      <WalkthroughTable
+        schedule={schedule}
+        walkthrough={walkthrough}
+        hoverKey={hoverKey}
+        onHoverKey={setHoverKey}
+      />
+
+      <DeleverageScheduleCharts
+        schedule={schedule}
+        walkthrough={walkthrough}
+        currentPriceUsd={usableCurrentPrice}
+        scrubPriceUsd={scrubPriceUsd}
+        hoverKey={hoverKey}
+        onHoverKey={setHoverKey}
+      />
+
+      {walkthrough && (
+        <WhatIfScrubber
+          walkthrough={walkthrough}
+          initialPriceUsd={usableCurrentPrice}
+          scrubPriceUsd={scrubPriceUsd}
+          onScrub={setScrubPriceUsd}
+        />
+      )}
+
+      <div style={{ marginTop: 8 }}>
         <StatRow
-          key={trim.triggerElapsedFraction}
-          label={`Time trim at ${(trim.triggerElapsedFraction * 100).toFixed(0)}% elapsed`}
-          value={`sell ${(trim.trimFractionBps / 100).toFixed(0)}%`}
+          label="Safety deposit (refundable)"
+          value={`$${schedule.safetyDepositRequiredUsd}`}
         />
-      ))}
-      <div style={{ marginTop: 10 }}>
-        <DeleverageLadderChart
-          schedule={schedule}
-          entryPriceUsd={entryPriceUsd}
-          currentPriceUsd={currentPriceUsd}
-        />
+        {schedule.safetyDepositCollectedUsd != null && (
+          <StatRow nested label="Collected" value={`$${schedule.safetyDepositCollectedUsd}`} />
+        )}
       </div>
     </StatGroup>
   )
 }
 
-function StepTable({ steps }: { steps: DeleverageScheduleStep[] }) {
+// ---------------------------------------------------------------------------
+// Engine vs schedule, side by side, in plain language.
+// ---------------------------------------------------------------------------
+
+function ProtectionComparison({
+  schedule,
+  walkthrough,
+  liquidationPriceUsd,
+}: {
+  schedule: DeleverageScheduleView
+  walkthrough: ScheduleWalkthrough | null
+  liquidationPriceUsd: string
+}) {
+  const stepCount = schedule.steps.length
+  const firstTrigger = schedule.steps[0]?.triggerPriceUsd
+  const lastTrigger = schedule.steps[stepCount - 1]?.triggerPriceUsd
+
+  const cardStyle = {
+    border: '1px solid rgba(255,255,255,0.1)',
+    background: 'rgba(255,255,255,0.02)',
+    padding: '10px 12px',
+    minWidth: 0,
+  } as const
+  const headStyle = {
+    fontSize: 9,
+    fontWeight: 600,
+    letterSpacing: '0.12em',
+    textTransform: 'uppercase',
+    marginBottom: 6,
+  } as const
+  const bodyStyle = {
+    fontSize: 11,
+    lineHeight: 1.5,
+    color: 'var(--text-muted)',
+  } as const
+
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+        gap: 8,
+        margin: '4px 0 10px',
+      }}
+    >
+      <div style={cardStyle}>
+        <div style={{ ...headStyle, color: 'var(--text-dim)' }}>Standard (today)</div>
+        <div
+          style={{
+            fontSize: 15,
+            fontWeight: 600,
+            color: LIQUIDATION_COLOR,
+            fontVariantNumeric: 'tabular-nums',
+            marginBottom: 6,
+          }}
+        >
+          {formatCentsUsd(liquidationPriceUsd)} liquidation
+        </div>
+        <div style={bodyStyle}>
+          One liquidation price. Below it, the risk system sells for you in real time — amounts
+          and timing are decided in the moment, not fixed in advance.
+        </div>
+      </div>
+      <div style={{ ...cardStyle, borderColor: 'rgba(91,156,245,0.35)' }}>
+        <div style={{ ...headStyle, color: DEBT_CLEAR_COLOR }}>Scheduled (this quote)</div>
+        <div
+          style={{
+            fontSize: 15,
+            fontWeight: 600,
+            color: 'var(--text)',
+            fontVariantNumeric: 'tabular-nums',
+            marginBottom: 6,
+          }}
+        >
+          {stepCount} printed steps
+          {firstTrigger != null && lastTrigger != null && (
+            <span style={{ color: 'var(--text-muted)', fontWeight: 500 }}>
+              {' '}· {formatCentsUsd(firstTrigger)} → {formatCentsUsd(lastTrigger)}
+            </span>
+          )}
+        </div>
+        <div style={bodyStyle}>
+          Only the pre-committed slices below ever fire, plus a final debt-clear exit at{' '}
+          <span style={{ color: DEBT_CLEAR_COLOR }}>{formatCentsUsd(schedule.debtClearPriceUsd)}</span>
+          . Backed by a ${walkthrough ? walkthrough.safetyDepositUsd.toFixed(2) : schedule.safetyDepositRequiredUsd}{' '}
+          refundable deposit — you see every sale before you commit.
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Plain-language summary, computed from the schedule + position numbers.
+// ---------------------------------------------------------------------------
+
+function PlanSummary({
+  schedule,
+  walkthrough,
+  side,
+}: {
+  schedule: DeleverageScheduleView
+  walkthrough: ScheduleWalkthrough
+  side?: 'yes' | 'no'
+}) {
+  const { basis } = walkthrough
+  const firstStep = schedule.steps[0]
+  const positionPhrase = side != null ? `of ${side.toUpperCase()}` : 'of the position'
+
+  return (
+    <p
+      style={{
+        margin: '4px 0 10px',
+        fontSize: 12,
+        lineHeight: 1.6,
+        color: 'var(--text-muted)',
+      }}
+    >
+      You put in <strong style={{ color: 'var(--text)' }}>${basis.collateralUsd.toFixed(2)}</strong>{' '}
+      + a <strong style={{ color: 'var(--text)' }}>${walkthrough.safetyDepositUsd.toFixed(2)}</strong>{' '}
+      refundable deposit and control{' '}
+      <strong style={{ color: 'var(--text)' }}>${basis.notionalUsd.toFixed(2)}</strong> {positionPhrase} at{' '}
+      <strong style={{ color: 'var(--text)' }}>{formatCentsUsd(basis.entryPriceUsd)}</strong>. Nothing
+      happens above{' '}
+      <strong style={{ color: 'var(--text)' }}>{formatCentsUsd(walkthrough.quietZoneFloorUsd)}</strong>{' '}
+      (your quiet zone). If the price falls, we sell small pre-set slices at the{' '}
+      {schedule.steps.length} printed prices below — first at{' '}
+      <strong style={{ color: 'var(--text)' }}>{formatCentsUsd(firstStep.triggerPriceUsd)}</strong>{' '}
+      ({(firstStep.sellFractionBps / BPS_PER_PCT).toFixed(0)}% of the position). If it ever reaches{' '}
+      <strong style={{ color: DEBT_CLEAR_COLOR }}>{formatCentsUsd(walkthrough.debtClearPriceUsd)}</strong>{' '}
+      we sell just enough to repay the loan entirely. Worst case you lose your collateral; the
+      deposit comes back unless a crash gaps past the exit line.
+    </p>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// The full step-by-step plan, with cumulative columns and explicit cadence.
+// ---------------------------------------------------------------------------
+
+const TABLE_GRID_COLUMNS = '22px 52px 44px 44px 40px 44px 54px 58px'
+
+function WalkthroughTable({
+  schedule,
+  walkthrough,
+  hoverKey,
+  onHoverKey,
+}: {
+  schedule: DeleverageScheduleView
+  walkthrough: ScheduleWalkthrough | null
+  hoverKey: ScheduleHoverKey
+  onHoverKey: (key: ScheduleHoverKey) => void
+}) {
+  if (!walkthrough) return <SimpleStepTable steps={schedule.steps} />
+
+  const rowStyle = (key: ScheduleHoverKey) =>
+    ({
+      display: 'grid',
+      gridTemplateColumns: TABLE_GRID_COLUMNS,
+      gap: 6,
+      padding: '3px 8px',
+      background: hoverKey != null && hoverKey === key ? 'rgba(238,255,0,0.07)' : 'transparent',
+      cursor: 'default',
+    }) as const
+
+  return (
+    <div
+      style={{
+        margin: '6px 0',
+        border: '1px solid rgba(255,255,255,0.08)',
+        background: 'rgba(255,255,255,0.02)',
+        padding: '6px 0',
+        overflowX: 'auto',
+      }}
+    >
+      <div
+        style={{
+          ...rowStyle(null),
+          color: 'var(--text-dim)',
+          fontSize: 9,
+          textTransform: 'uppercase',
+          letterSpacing: '0.05em',
+        }}
+      >
+        <span>#</span>
+        <span>Trigger</span>
+        <span>Gap</span>
+        <span>Drop</span>
+        <span>Sell</span>
+        <span>Left</span>
+        <span>Proceeds</span>
+        <span>Loan after</span>
+      </div>
+
+      {walkthrough.stepRows.map((row) => (
+        <div
+          key={row.stepIndex}
+          style={{ ...rowStyle(row.stepIndex), ...cellFont }}
+          onMouseEnter={() => onHoverKey(row.stepIndex)}
+          onMouseLeave={() => onHoverKey(null)}
+        >
+          <span style={{ color: 'var(--text-muted)' }}>{row.stepIndex + 1}</span>
+          <span style={{ color: 'var(--text)' }}>{formatCentsUsd(row.triggerPriceUsd)}</span>
+          <span style={{ color: 'var(--text-dim)' }}>
+            {row.spacingUsd != null ? formatCentsUsd(row.spacingUsd) : '—'}
+          </span>
+          <span style={{ color: 'var(--text-muted)' }}>
+            −{(row.dropFromEntryFraction * PCT_PER_FRACTION).toFixed(0)}%
+          </span>
+          <span style={{ color: row.sellFractionBps === 0 ? 'var(--text-dim)' : 'var(--text)' }}>
+            {(row.sellFractionBps / BPS_PER_PCT).toFixed(0)}%
+          </span>
+          <span style={{ color: 'var(--text-muted)' }}>
+            {(row.remainingFractionAfter * PCT_PER_FRACTION).toFixed(0)}%
+          </span>
+          <span style={{ color: 'var(--text-muted)' }}>${row.proceedsUsd.toFixed(2)}</span>
+          <span style={{ color: 'var(--text)' }}>${row.loanAfterUsd.toFixed(2)}</span>
+        </div>
+      ))}
+
+      <div
+        style={{
+          ...rowStyle('debt-clear'),
+          ...cellFont,
+          borderTop: '1px solid rgba(91,156,245,0.25)',
+          marginTop: 3,
+          paddingTop: 5,
+        }}
+        onMouseEnter={() => onHoverKey('debt-clear')}
+        onMouseLeave={() => onHoverKey(null)}
+      >
+        <span style={{ color: DEBT_CLEAR_COLOR }}>⏻</span>
+        <span style={{ color: DEBT_CLEAR_COLOR }}>
+          {formatCentsUsd(walkthrough.debtClear.triggerPriceUsd)}
+        </span>
+        <span style={{ color: 'var(--text-dim)' }}>—</span>
+        <span style={{ color: 'var(--text-muted)' }}>
+          −{(walkthrough.debtClear.dropFromEntryFraction * PCT_PER_FRACTION).toFixed(0)}%
+        </span>
+        <span style={{ color: DEBT_CLEAR_COLOR }}>
+          {(walkthrough.debtClear.sellFractionOfCurrentBps / BPS_PER_PCT).toFixed(0)}%
+        </span>
+        <span style={{ color: 'var(--text-muted)' }}>
+          {(walkthrough.debtClear.remainingFractionAfter * PCT_PER_FRACTION).toFixed(0)}%
+        </span>
+        <span style={{ color: 'var(--text-muted)' }}>
+          ${walkthrough.debtClear.proceedsUsd.toFixed(2)}
+        </span>
+        <span style={{ color: DEBT_CLEAR_COLOR }}>$0.00</span>
+      </div>
+      <div style={{ padding: '2px 8px 0', fontSize: 9, color: DEBT_CLEAR_COLOR, opacity: 0.8 }}>
+        Debt-clear exit — fires the moment the price touches{' '}
+        {formatCentsUsd(walkthrough.debtClearPriceUsd)}, selling just enough to repay the loan in
+        full.
+      </div>
+
+      {schedule.timeTrims?.map((trim) => (
+        <div
+          key={trim.triggerElapsedFraction}
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '22px 1fr 44px',
+            gap: 6,
+            padding: '4px 8px 1px',
+            ...cellFont,
+            borderTop: '1px dashed rgba(255,255,255,0.08)',
+            marginTop: 3,
+          }}
+        >
+          <span style={{ color: 'var(--text-dim)' }}>◷</span>
+          <span style={{ color: 'var(--text-muted)', whiteSpace: 'normal' }}>
+            At {(trim.triggerElapsedFraction * PCT_PER_FRACTION).toFixed(0)}% of game time,
+            regardless of price
+          </span>
+          <span style={{ color: 'var(--text)', textAlign: 'right' }}>
+            sell {(trim.trimFractionBps / BPS_PER_PCT).toFixed(0)}%
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// Fallback when the position numbers can't be parsed — schedule-only columns.
+function SimpleStepTable({ steps }: { steps: DeleverageScheduleStep[] }) {
   const gridStyle = {
     display: 'grid',
     gridTemplateColumns: '36px 1fr auto',
@@ -79,7 +411,15 @@ function StepTable({ steps }: { steps: DeleverageScheduleStep[] }) {
         padding: '6px 0',
       }}
     >
-      <div style={{ ...gridStyle, color: 'var(--text-dim)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+      <div
+        style={{
+          ...gridStyle,
+          color: 'var(--text-dim)',
+          fontSize: 10,
+          textTransform: 'uppercase',
+          letterSpacing: '0.06em',
+        }}
+      >
         <span>Step</span>
         <span>Trigger price</span>
         <span>Sell</span>
@@ -90,9 +430,9 @@ function StepTable({ steps }: { steps: DeleverageScheduleStep[] }) {
           style={{ ...gridStyle, fontSize: 12, fontVariantNumeric: 'tabular-nums' }}
         >
           <span style={{ color: 'var(--text-muted)' }}>{step.stepIndex + 1}</span>
-          <span style={{ color: 'var(--text)' }}>${step.triggerPriceUsd}</span>
+          <span style={{ color: 'var(--text)' }}>{formatCentsUsd(step.triggerPriceUsd)}</span>
           <span style={{ color: 'var(--text)' }}>
-            {(step.sellFractionBps / 100).toFixed(0)}%
+            {(step.sellFractionBps / BPS_PER_PCT).toFixed(0)}%
           </span>
         </div>
       ))}
@@ -100,298 +440,173 @@ function StepTable({ steps }: { steps: DeleverageScheduleStep[] }) {
   )
 }
 
-const PAD_LEFT = 40
-const PAD_RIGHT = 34
-const PAD_TOP = 8
-const PAD_BOTTOM = 8
-const HEIGHT = 150
-const MIN_LABEL_PX = 12
-const Y_DOMAIN_PAD_FRACTION = 0.06
-const STEP_BASE_STROKE_PX = 1
-const STEP_STROKE_PER_FULL_SELL_PX = 4
+// ---------------------------------------------------------------------------
+// "What if the price fell to X?" — a slider that narrates the cumulative state.
+// ---------------------------------------------------------------------------
 
-interface TooltipState {
-  clientX: number
-  clientY: number
-  step: DeleverageScheduleStep
-}
+const SCRUB_STEP_USD = 0.001
+const SCRUB_UNDERSHOOT_FRACTION = 0.15
 
-interface AxisLabel {
-  priceUsd: number
-  text: string
-  color: string
-  priority: number
-}
-
-function DeleverageLadderChart({
-  schedule,
-  entryPriceUsd,
-  currentPriceUsd,
+function WhatIfScrubber({
+  walkthrough,
+  initialPriceUsd,
+  scrubPriceUsd,
+  onScrub,
 }: {
-  schedule: DeleverageScheduleView
-  entryPriceUsd?: string
-  currentPriceUsd?: string
+  walkthrough: ScheduleWalkthrough
+  initialPriceUsd: number | null
+  scrubPriceUsd: number | null
+  onScrub: (priceUsd: number) => void
 }) {
-  const svgRef = useRef<SVGSVGElement>(null)
-  const [tooltip, setTooltip] = useState<TooltipState | null>(null)
-  const [svgWidth, setSvgWidth] = useState(300)
+  const maxPrice = walkthrough.basis.entryPriceUsd
+  const lowestTrigger = Math.min(
+    walkthrough.debtClearPriceUsd,
+    ...walkthrough.stepRows.map((row) => row.triggerPriceUsd),
+  )
+  const minPrice = Math.max(
+    SCRUB_STEP_USD,
+    lowestTrigger - (maxPrice - lowestTrigger) * SCRUB_UNDERSHOOT_FRACTION,
+  )
 
-  const measureRef = useCallback((node: HTMLDivElement | null) => {
-    if (!node) return
-    const ro = new ResizeObserver((entries) => {
-      const w = entries[0]?.contentRect.width
-      if (w) setSvgWidth(w)
-    })
-    ro.observe(node)
-    setSvgWidth(node.getBoundingClientRect().width || 300)
-  }, [])
-
-  useEffect(() => {
-    if (!tooltip) return
-    const dismiss = () => setTooltip(null)
-    window.addEventListener('scroll', dismiss, true)
-    return () => window.removeEventListener('scroll', dismiss, true)
-  }, [tooltip])
-
-  const chartW = svgWidth - PAD_LEFT - PAD_RIGHT
-  const chartH = HEIGHT - PAD_TOP - PAD_BOTTOM
-
-  const stepPrices = schedule.steps.map((s) => parseFloat(s.triggerPriceUsd))
-  const debtClearPrice = parseFloat(schedule.debtClearPriceUsd)
-  const entryPrice = entryPriceUsd != null ? parseFloat(entryPriceUsd) : null
-  const currentPrice = currentPriceUsd != null ? parseFloat(currentPriceUsd) : null
-
-  const domainPrices = [...stepPrices, debtClearPrice]
-  if (entryPrice != null && Number.isFinite(entryPrice)) domainPrices.push(entryPrice)
-  if (currentPrice != null && Number.isFinite(currentPrice)) domainPrices.push(currentPrice)
-
-  const rawMax = Math.max(...domainPrices)
-  const rawMin = Math.min(...domainPrices)
-  const rawRange = rawMax - rawMin || rawMax || 1
-  const yMax = rawMax + rawRange * Y_DOMAIN_PAD_FRACTION
-  const yMin = rawMin - rawRange * Y_DOMAIN_PAD_FRACTION
-  const yRange = yMax - yMin || 1
-
-  const toY = (priceUsd: number) => PAD_TOP + (1 - (priceUsd - yMin) / yRange) * chartH
-
-  // Left-axis labels: markers first (entry / current / debt-clear), then step
-  // triggers, dropping any label within MIN_LABEL_PX of an already-placed one.
-  const labelCandidates: AxisLabel[] = []
-  if (entryPrice != null && Number.isFinite(entryPrice)) {
-    labelCandidates.push({ priceUsd: entryPrice, text: 'entry', color: 'var(--text-muted)', priority: 0 })
-  }
-  if (currentPrice != null && Number.isFinite(currentPrice)) {
-    labelCandidates.push({ priceUsd: currentPrice, text: 'now', color: CURRENT_MARKER_COLOR, priority: 0 })
-  }
-  labelCandidates.push({ priceUsd: debtClearPrice, text: `$${debtClearPrice.toFixed(2)}`, color: DEBT_CLEAR_COLOR, priority: 0 })
-  for (const p of stepPrices) {
-    labelCandidates.push({ priceUsd: p, text: `$${p.toFixed(2)}`, color: 'var(--text-dim)', priority: 1 })
-  }
-  labelCandidates.sort((a, b) => a.priority - b.priority)
-  const axisLabels: AxisLabel[] = []
-  for (const candidate of labelCandidates) {
-    const cy = toY(candidate.priceUsd)
-    const hasRoom = axisLabels.every((l) => Math.abs(toY(l.priceUsd) - cy) >= MIN_LABEL_PX)
-    if (hasRoom) axisLabels.push(candidate)
-  }
-
-  const handleMouseMove = (e: React.MouseEvent<SVGRectElement>) => {
-    const rect = svgRef.current?.getBoundingClientRect()
-    if (!rect) return
-    const mouseY = e.clientY - rect.top
-    let closest = schedule.steps[0]
-    let minDist = Infinity
-    for (const step of schedule.steps) {
-      const d = Math.abs(toY(parseFloat(step.triggerPriceUsd)) - mouseY)
-      if (d < minDist) {
-        minDist = d
-        closest = step
-      }
-    }
-    setTooltip({ clientX: e.clientX, clientY: e.clientY, step: closest })
-  }
-
-  const hoverPrice = tooltip ? parseFloat(tooltip.step.triggerPriceUsd) : null
+  const clamp = (value: number) => Math.min(maxPrice, Math.max(minPrice, value))
+  const price = clamp(scrubPriceUsd ?? initialPriceUsd ?? maxPrice)
+  const state = scheduleStateAtPrice(walkthrough, price)
 
   return (
-    <>
+    <div
+      style={{
+        marginTop: 10,
+        border: '1px solid rgba(255,255,255,0.1)',
+        background: 'rgba(255,255,255,0.04)',
+        padding: '12px 14px',
+      }}
+    >
       <div
         style={{
-          background: 'rgba(255,255,255,0.04)',
-          border: '1px solid rgba(255,255,255,0.1)',
-          borderRadius: 0,
-          padding: '12px 14px',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'baseline',
+          marginBottom: 8,
         }}
       >
-        <div
+        <span
           style={{
             fontSize: 11,
             fontWeight: 600,
             color: 'var(--text)',
-            marginBottom: 10,
             textTransform: 'uppercase',
             letterSpacing: '0.06em',
           }}
         >
-          Deleverage Ladder
-        </div>
-
-        <div ref={measureRef} style={{ width: '100%' }}>
-          <svg
-            ref={svgRef}
-            width={svgWidth}
-            height={HEIGHT}
-            style={{ display: 'block', overflow: 'visible' }}
-          >
-            {/* Step trigger lines — thickness scales with sell fraction */}
-            {schedule.steps.map((step) => {
-              const sy = toY(parseFloat(step.triggerPriceUsd))
-              return (
-                <g key={step.stepIndex}>
-                  <line
-                    x1={PAD_LEFT}
-                    y1={sy}
-                    x2={PAD_LEFT + chartW}
-                    y2={sy}
-                    stroke="rgba(255,255,255,0.7)"
-                    strokeWidth={
-                      STEP_BASE_STROKE_PX +
-                      (step.sellFractionBps / 10000) * STEP_STROKE_PER_FULL_SELL_PX
-                    }
-                  />
-                  <text
-                    x={PAD_LEFT + chartW + 4}
-                    y={sy + 3}
-                    textAnchor="start"
-                    fontSize={9}
-                    fontFamily="var(--font)"
-                    fill="var(--text-muted)"
-                  >
-                    {(step.sellFractionBps / 100).toFixed(0)}%
-                  </text>
-                </g>
-              )
-            })}
-
-            {/* Entry price marker */}
-            {entryPrice != null && Number.isFinite(entryPrice) && (
-              <line
-                x1={PAD_LEFT}
-                y1={toY(entryPrice)}
-                x2={PAD_LEFT + chartW}
-                y2={toY(entryPrice)}
-                stroke={ENTRY_MARKER_COLOR}
-                strokeWidth={1}
-                strokeDasharray="4 3"
-              />
-            )}
-
-            {/* Current price marker */}
-            {currentPrice != null && Number.isFinite(currentPrice) && (
-              <line
-                x1={PAD_LEFT}
-                y1={toY(currentPrice)}
-                x2={PAD_LEFT + chartW}
-                y2={toY(currentPrice)}
-                stroke={CURRENT_MARKER_COLOR}
-                strokeWidth={1}
-                strokeDasharray="4 3"
-              />
-            )}
-
-            {/* Debt-clear exit marker */}
-            <line
-              x1={PAD_LEFT}
-              y1={toY(debtClearPrice)}
-              x2={PAD_LEFT + chartW}
-              y2={toY(debtClearPrice)}
-              stroke={DEBT_CLEAR_COLOR}
-              strokeWidth={1}
-              strokeDasharray="6 3"
-            />
-
-            {/* Left-axis price labels */}
-            {axisLabels.map((label) => (
-              <text
-                key={`${label.text}-${label.priceUsd}`}
-                x={PAD_LEFT - 4}
-                y={toY(label.priceUsd) + 3}
-                textAnchor="end"
-                fontSize={9}
-                fontFamily="var(--font)"
-                fill={label.color}
-              >
-                {label.text}
-              </text>
-            ))}
-
-            {/* Hover highlight */}
-            {tooltip && hoverPrice != null && (
-              <circle
-                cx={PAD_LEFT + chartW / 2}
-                cy={toY(hoverPrice)}
-                r={3.5}
-                fill="#ffffff"
-                stroke="rgba(12,12,12,0.9)"
-                strokeWidth={1}
-                pointerEvents="none"
-              />
-            )}
-
-            {/* Invisible interaction layer */}
-            <rect
-              x={PAD_LEFT}
-              y={PAD_TOP}
-              width={chartW}
-              height={chartH}
-              fill="transparent"
-              onMouseMove={handleMouseMove}
-              onMouseLeave={() => setTooltip(null)}
-              style={{ cursor: 'crosshair' }}
-            />
-          </svg>
-        </div>
-      </div>
-
-      {/* Tooltip — fixed position follows mouse */}
-      {tooltip && (
-        <div
+          What if the price fell to…
+        </span>
+        <span
           style={{
-            position: 'fixed',
-            left: tooltip.clientX + 12,
-            top: tooltip.clientY - 40,
-            background: 'rgba(20,20,20,0.96)',
-            border: '1px solid rgba(255,255,255,0.2)',
-            borderRadius: 0,
-            padding: '5px 9px',
-            pointerEvents: 'none',
-            whiteSpace: 'nowrap',
-            zIndex: 1000,
+            fontSize: 14,
+            fontWeight: 600,
+            color: 'var(--yellow)',
+            fontVariantNumeric: 'tabular-nums',
           }}
         >
-          <div
-            style={{
-              fontSize: 13,
-              fontWeight: 600,
-              color: '#ffffff',
-              fontFamily: 'var(--font)',
-            }}
-          >
-            ${tooltip.step.triggerPriceUsd}
-          </div>
-          <div
-            style={{
-              fontSize: 10,
-              color: 'var(--text-muted)',
-              marginTop: 1,
-              fontFamily: 'var(--font)',
-            }}
-          >
-            Step {tooltip.step.stepIndex + 1} · sell{' '}
-            {(tooltip.step.sellFractionBps / 100).toFixed(0)}%
-          </div>
-        </div>
-      )}
+          {formatCentsUsd(price)}
+        </span>
+      </div>
+
+      <input
+        type="range"
+        min={minPrice}
+        max={maxPrice}
+        step={SCRUB_STEP_USD}
+        value={price}
+        onChange={(e) => onScrub(clamp(Number(e.target.value)))}
+        aria-label="What-if price"
+        style={{ width: '100%', accentColor: 'var(--yellow)' }}
+      />
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          fontSize: 9,
+          color: 'var(--text-dim)',
+          marginTop: 2,
+        }}
+      >
+        <span>{formatCentsUsd(minPrice)}</span>
+        <span>entry {formatCentsUsd(maxPrice)}</span>
+      </div>
+
+      <p
+        style={{
+          margin: '8px 0 0',
+          fontSize: 12,
+          lineHeight: 1.55,
+          color: 'var(--text-muted)',
+        }}
+      >
+        <ScrubNarration walkthrough={walkthrough} price={price} state={state} />
+      </p>
+    </div>
+  )
+}
+
+function ScrubNarration({
+  walkthrough,
+  price,
+  state,
+}: {
+  walkthrough: ScheduleWalkthrough
+  price: number
+  state: ReturnType<typeof scheduleStateAtPrice>
+}) {
+  const atPrice = <strong style={{ color: 'var(--text)' }}>At {formatCentsUsd(price)}:</strong>
+  const nextEvent =
+    state.nextEventPriceUsd != null ? (
+      <>
+        {' '}Next:{' '}
+        {state.nextEventKind === 'debt-clear' ? (
+          <span style={{ color: DEBT_CLEAR_COLOR }}>
+            debt-clear exit at {formatCentsUsd(state.nextEventPriceUsd)}
+          </span>
+        ) : (
+          <>step at {formatCentsUsd(state.nextEventPriceUsd)}</>
+        )}
+        .
+      </>
+    ) : null
+
+  if (state.inQuietZone) {
+    return (
+      <>
+        {atPrice} inside your quiet zone — nothing has fired, you still hold 100% of your tokens
+        and the loan is unchanged at ${state.loanRemainingUsd.toFixed(2)}.{nextEvent}
+      </>
+    )
+  }
+
+  const holdPct = (state.remainingFraction * PCT_PER_FRACTION).toFixed(0)
+  const approx = walkthrough.basis.tokensAreEstimated ? '≈' : ''
+  const tokens = `${approx}${state.tokensRemaining.toFixed(0)}`
+  const totalTokens = `${approx}${walkthrough.basis.positionTokens.toFixed(0)}`
+
+  if (state.debtClearFired) {
+    return (
+      <>
+        {atPrice} {state.firedStepCount} step{state.firedStepCount === 1 ? '' : 's'} plus the{' '}
+        <span style={{ color: DEBT_CLEAR_COLOR }}>debt-clear exit</span> have fired — the loan is
+        fully repaid. You'd hold <strong style={{ color: 'var(--text)' }}>{holdPct}%</strong> of
+        your tokens ({tokens} of {totalTokens}), owned outright.
+        {nextEvent}
+      </>
+    )
+  }
+
+  return (
+    <>
+      {atPrice} {state.firedStepCount} of {state.totalStepCount} steps have fired. You'd hold{' '}
+      <strong style={{ color: 'var(--text)' }}>{holdPct}%</strong> of your tokens ({tokens} of{' '}
+      {totalTokens}), loan down to{' '}
+      <strong style={{ color: 'var(--text)' }}>${state.loanRemainingUsd.toFixed(2)}</strong>.
+      {nextEvent}
     </>
   )
 }

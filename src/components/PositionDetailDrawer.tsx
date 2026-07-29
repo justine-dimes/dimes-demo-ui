@@ -343,6 +343,8 @@ function OpenPositionDetail({
 
   const isFullyDeleveraged = position.current.bookLeverageBps <= 10000
 
+  const deleverageSchedule = getDeleverageSchedule(position)
+
   const currentPrice = parseFloat(position.current.markPriceUsd)
   const liquidationPrice = parseFloat(position.risk.currentLiquidationPriceUsd)
   // Straight gap to the liquidation barrier as a % of the current price. Guard
@@ -467,6 +469,8 @@ function OpenPositionDetail({
                 label="Liquidation Price"
                 value={`$${position.risk.currentLiquidationPriceUsd}`}
                 valueColor="#F5A623"
+                chip={deleverageSchedule ? 'superseded by schedule' : undefined}
+                deemphasized={deleverageSchedule != null}
               />
               <StatRow label="Distance to liquidation" value={distancePctDisplay} />
             </>
@@ -596,17 +600,20 @@ function OpenPositionDetail({
           </div>
         </StatGroup>
 
-        {(() => {
-          const deleverageSchedule = getDeleverageSchedule(position)
-          if (!deleverageSchedule) return null
-          return (
-            <ScheduledDeleveragingPanel
-              schedule={deleverageSchedule}
-              entryPriceUsd={position.entry.effectiveEntryPriceUsd ?? position.entry.priceUsd}
-              currentPriceUsd={position.current.markPriceUsd}
-            />
-          )
-        })()}
+        {deleverageSchedule && (
+          <ScheduledDeleveragingPanel
+            schedule={deleverageSchedule}
+            basis={{
+              entryPriceUsd: position.entry.effectiveEntryPriceUsd ?? position.entry.priceUsd,
+              notionalUsd: position.entry.notionalUsd,
+              collateralUsd: position.entry.collateralUsd,
+              positionTokenUnits:
+                position.entry.positionTokenUnits ?? position.current.positionTokenUnits,
+            }}
+            side={position.side === 'no' ? 'no' : 'yes'}
+            currentPriceUsd={position.current.markPriceUsd}
+          />
+        )}
 
         <StatGroup label="Timing" last>
           <StatRow label="Market Status" value={isVoided ? 'Voided' : position.timing.marketStatus} />

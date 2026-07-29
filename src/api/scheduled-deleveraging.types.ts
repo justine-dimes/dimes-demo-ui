@@ -37,29 +37,34 @@ export interface DeleverageScheduleView {
 //   sessionStorage.setItem('dimes.mockDeleverageSchedule', '1')
 //
 // Same sessionStorage gating as runtimeConfig.ts dev overrides (tab-scoped,
-// cleared on tab close). Numbers are harness-true, from the tennis scenario:
-// entry $0.52 at 2.25x on $44.44 collateral — 9 steps starting at $0.40
-// spaced ~$0.0344 apart, selling ~15% each, debt cleared at $0.2978,
-// refundable safety deposit $14.86.
+// cleared on tab close). Numbers are harness-true, from the real API capture
+// in scheduled-deleveraging.types.test.ts (tennis market, entry $0.51 at 2x
+// on $250 collateral): quiet-zone floor $0.4845, 9 steps from $0.36 down to
+// $0.1264 spaced $0.0292 apart with varied sell fractions (incl. two zero-sell
+// checkpoints), debt cleared at $0.2750, refundable safety deposit $75.76.
+// The single time trim is illustrative (the soccer capture carried 0 bps) so
+// the trim row is exercisable in QA.
 // ---------------------------------------------------------------------------
 
 const MOCK_SESSION_KEY = 'dimes.mockDeleverageSchedule';
 
-const MOCK_FIRST_TRIGGER_USD = 0.4;
-const MOCK_STEP_SPACING_USD = 0.0344;
-const MOCK_STEP_COUNT = 9;
-const MOCK_SELL_FRACTION_BPS = 1500;
-
 const MOCK_SCHEDULE: DeleverageScheduleView = {
-  entryBufferFloorPriceUsd: '0.4000',
-  steps: Array.from({ length: MOCK_STEP_COUNT }, (_, i) => ({
-    stepIndex: i,
-    triggerPriceUsd: (MOCK_FIRST_TRIGGER_USD - i * MOCK_STEP_SPACING_USD).toFixed(4),
-    sellFractionBps: MOCK_SELL_FRACTION_BPS,
-  })),
-  debtClearPriceUsd: '0.2978',
-  safetyDepositRequiredUsd: '14.86',
-  safetyDepositCollectedUsd: '14.86',
+  entryBufferFloorPriceUsd: '0.4845',
+  steps: [
+    { stepIndex: 0, triggerPriceUsd: '0.3600', sellFractionBps: 1404 },
+    { stepIndex: 1, triggerPriceUsd: '0.3308', sellFractionBps: 1101 },
+    { stepIndex: 2, triggerPriceUsd: '0.3016', sellFractionBps: 971 },
+    { stepIndex: 3, triggerPriceUsd: '0.2724', sellFractionBps: 855 },
+    { stepIndex: 4, triggerPriceUsd: '0.2432', sellFractionBps: 751 },
+    { stepIndex: 5, triggerPriceUsd: '0.2140', sellFractionBps: 0 },
+    { stepIndex: 6, triggerPriceUsd: '0.1848', sellFractionBps: 0 },
+    { stepIndex: 7, triggerPriceUsd: '0.1556', sellFractionBps: 658 },
+    { stepIndex: 8, triggerPriceUsd: '0.1264', sellFractionBps: 765 },
+  ],
+  timeTrims: [{ triggerElapsedFraction: 0.5, trimFractionBps: 2000 }],
+  debtClearPriceUsd: '0.2750',
+  safetyDepositRequiredUsd: '75.76',
+  safetyDepositCollectedUsd: '75.76',
 };
 
 function isMockEnabled(): boolean {

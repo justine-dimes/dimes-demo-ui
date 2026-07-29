@@ -117,6 +117,8 @@ export function QuoteDetails({
         value={`$${offer.currentLiquidationPriceUsd}`}
         valueColor="#F5A623"
         previousValue={prev ? `$${prev.currentLiquidationPriceUsd}` : undefined}
+        chip={deleverageSchedule ? 'superseded by schedule' : undefined}
+        deemphasized={deleverageSchedule != null}
       />
       {offer.allowPartialFill && (
         <StatRow
@@ -129,7 +131,15 @@ export function QuoteDetails({
       {deleverageSchedule && (
         <ScheduledDeleveragingPanel
           schedule={deleverageSchedule}
-          entryPriceUsd={offer.entryPriceUsd}
+          basis={{
+            entryPriceUsd: offer.entryPriceUsd,
+            notionalUsd: offer.notionalAmountUsd,
+            collateralUsd: String(Number(offer.collateralUsdcUnits) / USDC_UNITS_PER_USD),
+            positionTokenUnits: offer.minExpectedPositionTokenUnits,
+          }}
+          side={offer.effectiveSide === 'no' ? 'no' : 'yes'}
+          liquidationPriceUsd={offer.currentLiquidationPriceUsd}
+          showComparison
           last
         />
       )}

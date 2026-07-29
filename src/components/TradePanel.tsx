@@ -19,6 +19,7 @@ import {
   useCreatePosition,
   USDC_ADDRESS,
 } from '../contract/hooks'
+import { setScheduledDeleverageOptIn } from '../api/dimesClient'
 import { useCreatePositionPushFunded } from '../contract/pushFundedHooks'
 import { useCreatePositionSmart } from '../contract/smartWalletHooks'
 import { useAuthStore } from '../store/auth'
@@ -122,6 +123,7 @@ export function TradePanel({
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [allowPartialFill, setAllowPartialFill] = useState(false)
   const [minFillBps, setMinFillBps] = useState(MIN_FILL_BPS_DEFAULT)
+  const [useScheduledDeleverage, setUseScheduledDeleverage] = useState(false)
 
   const { data: feeRates } = useFeeRates(market.ticker)
 
@@ -322,6 +324,7 @@ export function TradePanel({
   const handleGetQuote = () => {
     if (!canGetQuote) return
     hasAutoRetriedRef.current = false
+    setScheduledDeleverageOptIn(useScheduledDeleverage)
     getDraft({
       marketTicker: market.ticker,
       effectiveSide: side,
@@ -805,6 +808,36 @@ export function TradePanel({
             </div>
           </div>
         </div>
+
+        {/* Scheduled deleveraging opt-in (preview) — engine path stays default */}
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 10,
+            marginTop: 14,
+            cursor: 'pointer',
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={useScheduledDeleverage}
+            onChange={(e) => {
+              setUseScheduledDeleverage(e.target.checked)
+              clearOffer()
+            }}
+            style={{ accentColor: 'var(--yellow)', marginTop: 2, flexShrink: 0 }}
+          />
+          <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text)' }}>
+              Scheduled deleveraging (preview)
+            </span>
+            <span style={{ fontSize: 11, lineHeight: 1.4, color: 'var(--text-muted)' }}>
+              Get a printed plan of pre-committed sell steps instead of real-time engine
+              deleveraging. Your quote will show the full schedule.
+            </span>
+          </span>
+        </label>
 
         {/* Get quote */}
         <div style={{ marginTop: 18, position: 'relative' }}>
