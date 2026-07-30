@@ -227,3 +227,51 @@ describe('ScheduledDeleveragingPanel', () => {
     expect(screen.queryByRole('slider')).not.toBeInTheDocument()
   })
 })
+
+// Backstop-above-ladder: the debt-clear backstop (32.5¢) sits ABOVE the first
+// printed step (31.5¢). The backstop fires first on a decline and repays the
+// loan; the steps below are committed but never reached.
+const aboveLadderSchedule: DeleverageScheduleView = {
+  entryBufferFloorPriceUsd: '0.4845',
+  steps: [
+    { stepIndex: 0, triggerPriceUsd: '0.3150', sellFractionBps: 1500 },
+    { stepIndex: 1, triggerPriceUsd: '0.2790', sellFractionBps: 1200 },
+    { stepIndex: 2, triggerPriceUsd: '0.2430', sellFractionBps: 1000 },
+  ],
+  debtClearPriceUsd: '0.3250',
+  safetyDepositRequiredUsd: '75.76',
+  safetyDepositCollectedUsd: '75.76',
+}
+
+describe('ScheduledDeleveragingPanel — backstop-above-ladder', () => {
+  function renderAboveLadder() {
+    return render(
+      <ScheduledDeleveragingPanel schedule={aboveLadderSchedule} basis={basis} side="yes" />,
+    )
+  }
+
+  it('summary says nothing sells until the backstop, and drops the "falls as steps repay" clause', () => {
+    renderAboveLadder()
+    const summary = paragraphMatching(/Nothing sells until/)
+    expect(summary.textContent).toContain('Nothing sells until the backstop at 32.5¢')
+    expect(summary.textContent).toContain('which repays your loan')
+    expect(summary.textContent).not.toContain('exit line falls as steps fire')
+  })
+
+  it('shows the not-reached note and keeps the deeper committed steps visible', () => {
+    renderAboveLadder()
+    expect(
+      screen.getByText(
+        /Steps below the backstop are your committed plan but aren't reached here/,
+      ),
+    ).toBeInTheDocument()
+    // The deeper committed steps are still rendered (dimmed, not hidden).
+    expect(screen.getAllByText('31.5¢').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('24.3¢').length).toBeGreaterThan(0)
+    // The backstop uses the "at" framing, not the at-entry "at most … falls" one.
+    expect(
+      screen.getByText(/Debt-clear backstop \(at 32\.5¢\)/),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/falls as steps repay/)).not.toBeInTheDocument()
+  })
+})

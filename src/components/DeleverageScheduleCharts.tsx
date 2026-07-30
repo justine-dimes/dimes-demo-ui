@@ -1,6 +1,6 @@
 import type { DeleverageScheduleView } from '../api/scheduled-deleveraging.types'
-import type { ScheduleWalkthrough } from '../utils/deleverageSchedule'
-import { formatCentsUsd } from '../utils/deleverageSchedule'
+import type { ScheduleWalkthrough, StaircaseDrop } from '../utils/deleverageSchedule'
+import { buildStaircaseDrops, formatCentsUsd } from '../utils/deleverageSchedule'
 import { useMeasuredWidth } from './useMeasuredWidth'
 
 export type ScheduleHoverKey = number | 'debt-clear' | null
@@ -16,14 +16,6 @@ const PAD_TOP = 8
 const PAD_BOTTOM = 18
 const HEIGHT = 190
 const DOMAIN_PAD_FRACTION = 0.06
-const BPS_PER_UNIT = 10_000
-
-interface StaircaseDrop {
-  key: number | 'debt-clear'
-  priceUsd: number
-  remainingBefore: number
-  remainingAfter: number
-}
 
 function priceDomain(
   schedule: DeleverageScheduleView,
@@ -44,60 +36,6 @@ function priceDomain(
   }
 }
 
-// An event is either a printed step (fraction sold of the surviving position,
-// so it chains multiplicatively) or the debt-clear exit (its remaining-after is
-// precomputed off the original position in the walkthrough).
-interface StaircaseEvent {
-  key: number | 'debt-clear'
-  priceUsd: number
-  remainingMultiplier: number | null
-  absoluteRemainingAfter: number | null
-}
-
-// Static per-step staircase: start at 100%, drop at each event's trigger price.
-// Events are ordered by price DESCENDING (highest price = leftmost, since price
-// falls left → right) before chaining the remaining fraction, so the debt-clear
-// renders at its true price position rather than always last. For coherent
-// (post-gate) schedules the debt-clear is the lowest price and stays at the
-// bottom-right; this just makes the ordering robust. The printed schedule is
-// fixed and known at quote time — no simulation.
-function buildStaircaseDrops(
-  schedule: DeleverageScheduleView,
-  walkthrough: ScheduleWalkthrough | null,
-): StaircaseDrop[] {
-  const events: StaircaseEvent[] = schedule.steps.map((step) => ({
-    key: step.stepIndex,
-    priceUsd: parseFloat(step.triggerPriceUsd),
-    remainingMultiplier: 1 - step.sellFractionBps / BPS_PER_UNIT,
-    absoluteRemainingAfter: null,
-  }))
-  if (walkthrough) {
-    events.push({
-      key: 'debt-clear',
-      priceUsd: walkthrough.debtClear.triggerPriceUsd,
-      remainingMultiplier: null,
-      absoluteRemainingAfter: walkthrough.debtClear.remainingFractionAfter,
-    })
-  }
-
-  events.sort((a, b) => b.priceUsd - a.priceUsd)
-
-  let remaining = 1
-  return events.map((event) => {
-    const remainingBefore = remaining
-    remaining =
-      event.absoluteRemainingAfter != null
-        ? event.absoluteRemainingAfter
-        : remaining * event.remainingMultiplier!
-    return {
-      key: event.key,
-      priceUsd: event.priceUsd,
-      remainingBefore,
-      remainingAfter: remaining,
-    }
-  })
-}
-
 export function DeleverageScheduleCharts({
   schedule,
   walkthrough,
@@ -115,7 +53,7 @@ export function DeleverageScheduleCharts({
 }) {
   const entryPriceUsd = walkthrough?.basis.entryPriceUsd ?? null
   const domain = priceDomain(schedule, entryPriceUsd, currentPriceUsd)
-  const drops = buildStaircaseDrops(schedule, walkthrough)
+  const drops = buildStaircaseDrops(walkthrough)
 
   return (
     <div style={{ marginTop: 10 }}>

@@ -71,6 +71,36 @@ export interface ScheduleWalkthrough {
   debtClear: DebtClearRow;
 }
 
+// ---------------------------------------------------------------------------
+// Coherent price-sweep model.
+//
+// The printed ladder and the debt-clear backstop are two independent facts:
+// the steps fire at fixed prices, the backstop fires at its printed
+// `debtClearPriceUsd`. On a straight decline they interleave purely by price.
+// This forward-simulates that decline so the table and chart never contradict
+// each other. Once the backstop repays the loan, no further forced sells
+// happen, so every event below it is part of the committed plan but is not
+// reached on this decline.
+//
+// For the common case (backstop is the lowest-price event) this reproduces the
+// old behaviour exactly: all steps fire top-down, backstop fires last, every
+// event reached. Only "backstop-above-ladder" positions change: the backstop
+// fires first and the steps beneath it are marked not-reached.
+// ---------------------------------------------------------------------------
+
+export type CoherentEventKind = 'step' | 'debt-clear';
+
+export interface CoherentEvent {
+  kind: CoherentEventKind;
+  stepIndex: number | null;
+  priceUsd: number;
+  sellFractionOfCurrent: number;
+  tokensSold: number;
+  remainingFractionAfter: number;
+  loanAfterUsd: number;
+  reached: boolean;
+}
+
 export interface ScheduleStateAtPrice {
   priceUsd: number;
   firedStepCount: number;
@@ -167,6 +197,117 @@ export function buildScheduleWalkthrough(
   };
 
   return { basis, quietZoneFloorUsd, debtClearPriceUsd, safetyDepositUsd, stepRows, debtClear };
+}
+
+interface PendingEvent {
+  kind: CoherentEventKind;
+  stepIndex: number | null;
+  priceUsd: number;
+  sellFractionBps: number | null;
+}
+
+// Forward-simulate a straight price decline over the printed steps plus the
+// debt-clear backstop, ordered by price DESCENDING (price falls, so highest
+// price fires first). The backstop price is the authoritative printed value —
+// it is never invented or moved. Once the backstop repays the loan, selling
+// stops: the backstop and every lower-price event are marked reached:false.
+export function buildCoherentEvents(walkthrough: ScheduleWalkthrough): CoherentEvent[] {
+  const { basis, stepRows, debtClearPriceUsd } = walkthrough;
+
+  const pending: PendingEvent[] = stepRows.map((row) => ({
+    kind: 'step',
+    stepIndex: row.stepIndex,
+    priceUsd: row.triggerPriceUsd,
+    sellFractionBps: row.sellFractionBps,
+  }));
+  pending.push({
+    kind: 'debt-clear',
+    stepIndex: null,
+    priceUsd: debtClearPriceUsd,
+    sellFractionBps: null,
+  });
+  pending.sort((a, b) => b.priceUsd - a.priceUsd);
+
+  let currentTokens = basis.positionTokens;
+  let loanUsd = basis.loanUsd;
+  let sellingStopped = false;
+
+  return pending.map((event) => {
+    if (sellingStopped) {
+      return {
+        kind: event.kind,
+        stepIndex: event.stepIndex,
+        priceUsd: event.priceUsd,
+        sellFractionOfCurrent: 0,
+        tokensSold: 0,
+        remainingFractionAfter: basis.positionTokens > 0 ? currentTokens / basis.positionTokens : 0,
+        loanAfterUsd: loanUsd,
+        reached: false,
+      };
+    }
+
+    let tokensSold: number;
+    if (event.kind === 'step') {
+      const sellFraction = event.sellFractionBps! / BPS_PER_UNIT;
+      tokensSold = currentTokens * sellFraction;
+    } else {
+      tokensSold = event.priceUsd > 0 ? Math.min(loanUsd / event.priceUsd, currentTokens) : 0;
+    }
+
+    const sellFractionOfCurrent = currentTokens > 0 ? tokensSold / currentTokens : 0;
+    const proceedsUsd = tokensSold * event.priceUsd;
+    loanUsd = Math.max(0, loanUsd - proceedsUsd);
+    currentTokens -= tokensSold;
+
+    if (event.kind === 'debt-clear') {
+      loanUsd = 0;
+      sellingStopped = true;
+    }
+
+    return {
+      kind: event.kind,
+      stepIndex: event.stepIndex,
+      priceUsd: event.priceUsd,
+      sellFractionOfCurrent,
+      tokensSold,
+      remainingFractionAfter: basis.positionTokens > 0 ? currentTokens / basis.positionTokens : 0,
+      loanAfterUsd: loanUsd,
+      reached: true,
+    };
+  });
+}
+
+export interface StaircaseDrop {
+  key: number | 'debt-clear';
+  priceUsd: number;
+  remainingBefore: number;
+  remainingAfter: number;
+}
+
+// Staircase for the "Position Remaining" chart, built from the shared coherent
+// price-sweep: one drop per REACHED event (steps and the backstop), in price
+// order. After the backstop repays the loan the line goes flat — no phantom
+// drops below it. For the common case (backstop lowest) this is the full
+// staircase then the backstop drop at the bottom; for backstop-above-ladder it
+// is flat down to the backstop, one drop, then flat below (the deeper steps are
+// committed but not reached).
+export function buildStaircaseDrops(walkthrough: ScheduleWalkthrough | null): StaircaseDrop[] {
+  if (!walkthrough) return [];
+
+  const events = buildCoherentEvents(walkthrough);
+  let remainingBefore = 1;
+  const drops: StaircaseDrop[] = [];
+  for (const event of events) {
+    if (!event.reached) continue;
+    drops.push({
+      key: event.kind === 'debt-clear' ? 'debt-clear' : event.stepIndex!,
+      priceUsd: event.priceUsd,
+      remainingBefore,
+      remainingAfter: event.remainingFractionAfter,
+    });
+    remainingBefore = event.remainingFractionAfter;
+  }
+  return drops;
 }
 
 export function scheduleStateAtPrice(

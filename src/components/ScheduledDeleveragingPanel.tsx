@@ -10,6 +10,7 @@ import type {
   ScheduleWalkthrough,
 } from '../utils/deleverageSchedule'
 import {
+  buildCoherentEvents,
   buildScheduleWalkthrough,
   formatCentsUsd,
   parseScheduleBasis,
@@ -272,6 +273,12 @@ function PlanSummary({
   const medianSpacingUsd = spacings.length > 0 ? spacings[Math.floor(spacings.length / 2)] : null
   const maxSellPct = Math.max(...schedule.steps.map((s) => s.sellFractionBps)) / BPS_PER_PCT
 
+  // The first thing to fire on a decline is the highest-price event, which is
+  // the backstop for backstop-above-ladder positions and a step otherwise.
+  const events = buildCoherentEvents(walkthrough)
+  const firstEvent = events[0]
+  const backstopFiresFirst = firstEvent.kind === 'debt-clear'
+
   return (
     <p
       style={{
@@ -286,9 +293,21 @@ function PlanSummary({
       <strong style={{ color: 'var(--text)' }}>${walkthrough.safetyDepositUsd.toFixed(2)}</strong>{' '}
       refundable deposit and control{' '}
       <strong style={{ color: 'var(--text)' }}>${basis.notionalUsd.toFixed(2)}</strong> {positionPhrase} at{' '}
-      <strong style={{ color: 'var(--text)' }}>{formatCentsUsd(basis.entryPriceUsd)}</strong>. Nothing
-      sells until the first step at{' '}
-      <strong style={{ color: 'var(--text)' }}>{formatCentsUsd(firstStep.triggerPriceUsd)}</strong>{' '}
+      <strong style={{ color: 'var(--text)' }}>{formatCentsUsd(basis.entryPriceUsd)}</strong>.{' '}
+      {backstopFiresFirst ? (
+        <>
+          Nothing sells until the backstop at{' '}
+          <strong style={{ color: DEBT_CLEAR_COLOR }}>
+            {formatCentsUsd(walkthrough.debtClearPriceUsd)}
+          </strong>
+          , which repays your loan
+        </>
+      ) : (
+        <>
+          Nothing sells until the first step at{' '}
+          <strong style={{ color: 'var(--text)' }}>{formatCentsUsd(firstStep.triggerPriceUsd)}</strong>
+        </>
+      )}{' '}
       — the whole band from entry down to there stays untouched (including a hard no-sell quiet zone
       in the 5% just below entry, to{' '}
       <strong style={{ color: 'var(--text)' }}>{formatCentsUsd(walkthrough.quietZoneFloorUsd)}</strong>).
@@ -297,9 +316,15 @@ function PlanSummary({
       {(firstStep.sellFractionBps / BPS_PER_PCT).toFixed(0)}% at that first step. A debt-clear exit
       sells just enough to repay the loan entirely at{' '}
       <strong style={{ color: DEBT_CLEAR_COLOR }}>
-        at most {formatCentsUsd(walkthrough.debtClearPriceUsd)}
-      </strong>{' '}
-      — each slice repays part of the loan, so the exit line falls as steps fire.
+        {backstopFiresFirst
+          ? formatCentsUsd(walkthrough.debtClearPriceUsd)
+          : `at most ${formatCentsUsd(walkthrough.debtClearPriceUsd)}`}
+      </strong>
+      {backstopFiresFirst ? (
+        <>.</>
+      ) : (
+        <> — each slice repays part of the loan, so the exit line falls as steps fire.</>
+      )}
       {medianSpacingUsd != null && (
         <>
           {' '}
@@ -334,10 +359,12 @@ function WalkthroughTable({
 }) {
   if (!walkthrough) return <SimpleStepTable steps={schedule.steps} />
 
-  // The printed schedule is fixed: show every printed step, then the static
-  // debt-clear row (the at-entry worst-case exit, computed after the steps).
-  const stepRows = walkthrough.stepRows
-  const debtClear = walkthrough.debtClear
+  // One coherent price-sweep drives both table and chart: steps + backstop in
+  // price order, with events below a loan-repaying backstop marked not-reached.
+  const events = buildCoherentEvents(walkthrough)
+  const entryPriceUsd = walkthrough.basis.entryPriceUsd
+  const hasUnreachedEvents = events.some((event) => !event.reached)
+  const isBackstopAboveLadder = events[0]?.kind === 'debt-clear'
 
   const rowStyle = (key: ScheduleHoverKey) =>
     ({
@@ -378,65 +405,75 @@ function WalkthroughTable({
         <span>Loan after</span>
       </div>
 
-      {stepRows.map((row) => (
-        <div
-          key={row.stepIndex}
-          style={{ ...rowStyle(row.stepIndex), ...cellFont }}
-          onMouseEnter={() => onHoverKey(row.stepIndex)}
-          onMouseLeave={() => onHoverKey(null)}
-        >
-          <span style={{ color: 'var(--text-muted)' }}>{row.stepIndex + 1}</span>
-          <span style={{ color: 'var(--text)' }}>{formatCentsUsd(row.triggerPriceUsd)}</span>
-          <span style={{ color: 'var(--text-dim)' }}>
-            {row.spacingUsd != null ? formatCentsUsd(row.spacingUsd) : '—'}
-          </span>
-          <span style={{ color: 'var(--text-muted)' }}>
-            −{(row.dropFromEntryFraction * PCT_PER_FRACTION).toFixed(0)}%
-          </span>
-          <span style={{ color: row.sellFractionBps === 0 ? 'var(--text-dim)' : 'var(--text)' }}>
-            {(row.sellFractionBps / BPS_PER_PCT).toFixed(0)}%
-          </span>
-          <span style={{ color: 'var(--text-muted)' }}>
-            {(row.remainingFractionAfter * PCT_PER_FRACTION).toFixed(0)}%
-          </span>
-          <span style={{ color: 'var(--text-muted)' }}>${row.proceedsUsd.toFixed(2)}</span>
-          <span style={{ color: 'var(--text)' }}>${row.loanAfterUsd.toFixed(2)}</span>
-        </div>
-      ))}
+      {events.map((event, index) => {
+        const key: ScheduleHoverKey = event.kind === 'debt-clear' ? 'debt-clear' : event.stepIndex!
+        const isDebtClear = event.kind === 'debt-clear'
+        const previousPriceUsd = index > 0 ? events[index - 1].priceUsd : null
+        const gapUsd = previousPriceUsd != null ? previousPriceUsd - event.priceUsd : null
+        const dropFromEntryFraction = 1 - event.priceUsd / entryPriceUsd
+        const proceedsUsd = event.tokensSold * event.priceUsd
+        const sellPct = event.sellFractionOfCurrent * PCT_PER_FRACTION
+        const dimStyle = event.reached ? {} : { opacity: 0.45 }
+        const accent = isDebtClear ? DEBT_CLEAR_COLOR : 'var(--text)'
+        const rowNumber = isDebtClear ? '⏻' : `${event.stepIndex! + 1}`
+        return (
+          <div
+            key={String(key)}
+            style={{
+              ...rowStyle(key),
+              ...cellFont,
+              ...dimStyle,
+              ...(isDebtClear
+                ? { borderTop: '1px solid rgba(91,156,245,0.25)', marginTop: 3, paddingTop: 5 }
+                : {}),
+            }}
+            onMouseEnter={() => onHoverKey(key)}
+            onMouseLeave={() => onHoverKey(null)}
+          >
+            <span style={{ color: isDebtClear ? DEBT_CLEAR_COLOR : 'var(--text-muted)' }}>
+              {rowNumber}
+            </span>
+            <span style={{ color: accent }}>{formatCentsUsd(event.priceUsd)}</span>
+            <span style={{ color: 'var(--text-dim)' }}>
+              {gapUsd != null ? formatCentsUsd(gapUsd) : '—'}
+            </span>
+            <span style={{ color: 'var(--text-muted)' }}>
+              −{(dropFromEntryFraction * PCT_PER_FRACTION).toFixed(0)}%
+            </span>
+            <span style={{ color: sellPct === 0 ? 'var(--text-dim)' : accent }}>
+              {sellPct.toFixed(0)}%
+            </span>
+            <span style={{ color: 'var(--text-muted)' }}>
+              {(event.remainingFractionAfter * PCT_PER_FRACTION).toFixed(0)}%
+            </span>
+            <span style={{ color: 'var(--text-muted)' }}>${proceedsUsd.toFixed(2)}</span>
+            <span style={{ color: isDebtClear ? DEBT_CLEAR_COLOR : 'var(--text)' }}>
+              ${event.loanAfterUsd.toFixed(2)}
+            </span>
+          </div>
+        )
+      })}
 
-      <div
-        style={{
-          ...rowStyle('debt-clear'),
-          ...cellFont,
-          borderTop: '1px solid rgba(91,156,245,0.25)',
-          marginTop: 3,
-          paddingTop: 5,
-        }}
-        onMouseEnter={() => onHoverKey('debt-clear')}
-        onMouseLeave={() => onHoverKey(null)}
-      >
-        <span style={{ color: DEBT_CLEAR_COLOR }}>⏻</span>
-        <span style={{ color: DEBT_CLEAR_COLOR }}>
-          {formatCentsUsd(debtClear.triggerPriceUsd)}
-        </span>
-        <span style={{ color: 'var(--text-dim)' }}>—</span>
-        <span style={{ color: 'var(--text-muted)' }}>
-          −{(debtClear.dropFromEntryFraction * PCT_PER_FRACTION).toFixed(0)}%
-        </span>
-        <span style={{ color: DEBT_CLEAR_COLOR }}>
-          {(debtClear.sellFractionOfCurrentBps / BPS_PER_PCT).toFixed(0)}%
-        </span>
-        <span style={{ color: 'var(--text-muted)' }}>
-          {(debtClear.remainingFractionAfter * PCT_PER_FRACTION).toFixed(0)}%
-        </span>
-        <span style={{ color: 'var(--text-muted)' }}>${debtClear.proceedsUsd.toFixed(2)}</span>
-        <span style={{ color: DEBT_CLEAR_COLOR }}>$0.00</span>
-      </div>
       <div style={{ padding: '2px 8px 0', fontSize: 9, color: DEBT_CLEAR_COLOR, opacity: 0.8 }}>
-        Debt-clear exit (at most {formatCentsUsd(walkthrough.debtClearPriceUsd)} — falls as steps
-        repay) — sells just enough to repay the loan in full. The printed price is the at-entry
-        worst case.
+        {isBackstopAboveLadder ? (
+          <>
+            Debt-clear backstop (at {formatCentsUsd(walkthrough.debtClearPriceUsd)}) — sells just
+            enough to repay the loan in full.
+          </>
+        ) : (
+          <>
+            Debt-clear exit (at most {formatCentsUsd(walkthrough.debtClearPriceUsd)} — falls as steps
+            repay) — sells just enough to repay the loan in full. The printed price is the at-entry
+            worst case.
+          </>
+        )}
       </div>
+      {hasUnreachedEvents && (
+        <div style={{ padding: '2px 8px 0', fontSize: 9, color: 'var(--text-dim)' }}>
+          Steps below the backstop are your committed plan but aren't reached here — the backstop
+          repays the loan first.
+        </div>
+      )}
 
       {schedule.timeTrims?.map((trim) => (
         <div

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { DeleverageScheduleView } from '../api/scheduled-deleveraging.types'
 import {
+  buildCoherentEvents,
   buildScheduleWalkthrough,
   formatCentsUsd,
   parseScheduleBasis,
@@ -149,6 +150,104 @@ describe('scheduleStateAtPrice (static printed schedule)', () => {
     expect(state.remainingFraction).toBeCloseTo(0.0972, 3)
     expect(state.nextEventKind).toBeNull()
     expect(state.nextEventPriceUsd).toBeNull()
+  })
+})
+
+// Normal schedule: the debt-clear backstop (15¢) sits BELOW every printed step
+// (40¢/30¢/20¢), so on a straight decline the steps fire top-down and the
+// backstop fires last. Loan sized so the backstop still has work to do (320
+// collateral → 180 loan) rather than being pre-cleared by the steps.
+const normalSchedule: DeleverageScheduleView = {
+  entryBufferFloorPriceUsd: '0.4845',
+  steps: [
+    { stepIndex: 0, triggerPriceUsd: '0.4000', sellFractionBps: 1500 },
+    { stepIndex: 1, triggerPriceUsd: '0.3000', sellFractionBps: 1500 },
+    { stepIndex: 2, triggerPriceUsd: '0.2000', sellFractionBps: 1500 },
+  ],
+  debtClearPriceUsd: '0.1500',
+  safetyDepositRequiredUsd: '75.76',
+  safetyDepositCollectedUsd: '75.76',
+}
+const normalBasisInput = {
+  entryPriceUsd: '0.51',
+  notionalUsd: '500.00',
+  collateralUsd: '320.00',
+  positionTokenUnits: null,
+}
+
+// Backstop-above-ladder: the debt-clear backstop (32.5¢) sits ABOVE the first
+// printed step (31.5¢), so on a straight decline the backstop fires FIRST — it
+// repays the whole loan — and every printed step beneath it is committed but
+// never reached.
+const aboveLadderSchedule: DeleverageScheduleView = {
+  entryBufferFloorPriceUsd: '0.4845',
+  steps: [
+    { stepIndex: 0, triggerPriceUsd: '0.3150', sellFractionBps: 1500 },
+    { stepIndex: 1, triggerPriceUsd: '0.2790', sellFractionBps: 1200 },
+    { stepIndex: 2, triggerPriceUsd: '0.2430', sellFractionBps: 1000 },
+  ],
+  debtClearPriceUsd: '0.3250',
+  safetyDepositRequiredUsd: '75.76',
+  safetyDepositCollectedUsd: '75.76',
+}
+
+function coherentEvents(view: DeleverageScheduleView, input = basisInput) {
+  const basis = parseScheduleBasis(input)
+  expect(basis).not.toBeNull()
+  return buildCoherentEvents(buildScheduleWalkthrough(view, basis!))
+}
+
+describe('buildCoherentEvents', () => {
+  it('normal schedule (backstop lowest): steps fire top-down, backstop last, all reached', () => {
+    const events = coherentEvents(normalSchedule, normalBasisInput)
+    expect(events).toHaveLength(4)
+    expect(events.map((e) => e.kind)).toEqual(['step', 'step', 'step', 'debt-clear'])
+    expect(events.map((e) => e.reached)).toEqual([true, true, true, true])
+    // Steps chain multiplicatively off the surviving position.
+    expect(events[0].priceUsd).toBeCloseTo(0.4, 10)
+    expect(events[0].remainingFractionAfter).toBeCloseTo(0.85, 4)
+    expect(events[0].loanAfterUsd).toBeCloseTo(121.18, 2)
+    expect(events[2].loanAfterUsd).toBeCloseTo(62.43, 2)
+    // Backstop fires last on the loan still outstanding after the steps.
+    const backstop = events[3]
+    expect(backstop.kind).toBe('debt-clear')
+    expect(backstop.priceUsd).toBeCloseTo(0.15, 10)
+    expect(backstop.sellFractionOfCurrent).toBeCloseTo(0.6912, 3)
+    expect(backstop.remainingFractionAfter).toBeCloseTo(0.1896, 3)
+    expect(backstop.loanAfterUsd).toBe(0)
+  })
+
+  it('backstop-above-ladder: backstop is first by price, fires on the full loan', () => {
+    const events = coherentEvents(aboveLadderSchedule)
+    expect(events).toHaveLength(4)
+    // Sorted by price descending → backstop (32.5¢) leads, steps follow.
+    expect(events[0].kind).toBe('debt-clear')
+    expect(events[0].priceUsd).toBeCloseTo(0.325, 10)
+    // Fires on the FULL $250 loan: 250 / 0.325 = 769.23 of 980.39 tokens = 78.5%.
+    expect(events[0].tokensSold).toBeCloseTo(769.23, 2)
+    expect(events[0].sellFractionOfCurrent).toBeCloseTo(0.7846, 3)
+    expect(events[0].remainingFractionAfter).toBeCloseTo(0.2154, 3)
+    expect(events[0].loanAfterUsd).toBe(0)
+    expect(events[0].reached).toBe(true)
+  })
+
+  it('backstop-above-ladder: every step below the backstop is not reached and sells nothing', () => {
+    const events = coherentEvents(aboveLadderSchedule)
+    const steps = events.slice(1)
+    expect(steps.map((e) => e.kind)).toEqual(['step', 'step', 'step'])
+    expect(steps.every((e) => !e.reached)).toBe(true)
+    expect(steps.every((e) => e.tokensSold === 0)).toBe(true)
+    expect(steps.every((e) => e.sellFractionOfCurrent === 0)).toBe(true)
+    // Remaining fraction and loan stay frozen at the post-backstop state.
+    expect(steps.every((e) => e.remainingFractionAfter === events[0].remainingFractionAfter)).toBe(
+      true,
+    )
+    expect(steps.every((e) => e.loanAfterUsd === 0)).toBe(true)
+  })
+
+  it('backstop-above-ladder: the debt-clear price is the authoritative printed value, unmoved', () => {
+    const events = coherentEvents(aboveLadderSchedule)
+    expect(events[0].priceUsd).toBe(Number(aboveLadderSchedule.debtClearPriceUsd))
   })
 })
 
