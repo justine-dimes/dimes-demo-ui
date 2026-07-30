@@ -413,7 +413,7 @@ function WalkthroughTable({
           <span style={{ color: 'var(--text-muted)' }}>{row.stepIndex + 1}</span>
           <span style={{ color: 'var(--text)' }}>{formatCentsUsd(row.triggerPriceUsd)}</span>
           <span style={{ color: 'var(--text-muted)' }}>
-            {formatLeverage(row.effectiveLeverageAfter)}
+            {firedStepIndexes.has(row.stepIndex) ? formatLeverage(row.effectiveLeverageAfter) : '—'}
           </span>
           <span style={{ color: 'var(--text-dim)' }}>
             {row.spacingUsd != null ? formatCentsUsd(row.spacingUsd) : '—'}
