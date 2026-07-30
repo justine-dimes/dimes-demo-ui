@@ -345,7 +345,32 @@ function WalkthroughTable({
   const firedStepIndexes = new Set(
     simulatedEvents.filter((e) => e.kind === 'step').map((e) => e.stepIndex),
   )
-  const hasUnreachedSteps = walkthrough.stepRows.some((row) => !firedStepIndexes.has(row.stepIndex))
+  // The table shows the PHYSICAL straight-decline path: the steps that fire,
+  // then the exit at the moved-down price where it actually clears. Printed
+  // steps below that are unreachable on a straight fall (the exit liquidates
+  // first), so they're summarised as contingency lines rather than advertised.
+  const firedRows = walkthrough.stepRows.filter((row) => firedStepIndexes.has(row.stepIndex))
+  const contingencyRows = walkthrough.stepRows.filter((row) => !firedStepIndexes.has(row.stepIndex))
+  const basis = walkthrough.basis
+  const exitRow =
+    simulatedExit != null
+      ? {
+          priceUsd: simulatedExit.priceUsd,
+          dropFromEntryFraction: 1 - simulatedExit.priceUsd / basis.entryPriceUsd,
+          remainingFractionAfter: simulatedExit.remainingFractionAfter,
+          proceedsUsd: simulatedExit.tokensSold * simulatedExit.priceUsd,
+          loanAfterUsd: simulatedExit.loanAfterUsd,
+          sellFractionOfCurrent:
+            simulatedExit.tokensSold + simulatedExit.remainingFractionAfter * basis.positionTokens >
+            0
+              ? simulatedExit.tokensSold /
+                (simulatedExit.tokensSold +
+                  simulatedExit.remainingFractionAfter * basis.positionTokens)
+              : 0,
+          leverageAfter:
+            simulatedExit.loanAfterUsd <= 0 && simulatedExit.remainingFractionAfter > 0 ? 1 : null,
+        }
+      : null
 
   const rowStyle = (key: ScheduleHoverKey) =>
     ({
@@ -387,21 +412,17 @@ function WalkthroughTable({
         <span>Loan after</span>
       </div>
 
-      {walkthrough.stepRows.map((row) => (
+      {firedRows.map((row) => (
         <div
           key={row.stepIndex}
-          style={{
-            ...rowStyle(row.stepIndex),
-            ...cellFont,
-            opacity: firedStepIndexes.has(row.stepIndex) ? 1 : 0.45,
-          }}
+          style={{ ...rowStyle(row.stepIndex), ...cellFont }}
           onMouseEnter={() => onHoverKey(row.stepIndex)}
           onMouseLeave={() => onHoverKey(null)}
         >
           <span style={{ color: 'var(--text-muted)' }}>{row.stepIndex + 1}</span>
           <span style={{ color: 'var(--text)' }}>{formatCentsUsd(row.triggerPriceUsd)}</span>
           <span style={{ color: 'var(--text-muted)' }}>
-            {firedStepIndexes.has(row.stepIndex) ? formatLeverage(row.effectiveLeverageAfter) : '—'}
+            {formatLeverage(row.effectiveLeverageAfter)}
           </span>
           <span style={{ color: 'var(--text-dim)' }}>
             {row.spacingUsd != null ? formatCentsUsd(row.spacingUsd) : '—'}
@@ -433,25 +454,29 @@ function WalkthroughTable({
       >
         <span style={{ color: DEBT_CLEAR_COLOR }}>⏻</span>
         <span style={{ color: DEBT_CLEAR_COLOR }}>
-          {formatCentsUsd(walkthrough.debtClear.triggerPriceUsd)}
+          {exitRow != null ? formatCentsUsd(exitRow.priceUsd) : '—'}
         </span>
         <span style={{ color: DEBT_CLEAR_COLOR }}>
-          {formatLeverage(walkthrough.debtClear.effectiveLeverageAfter)}
+          {exitRow != null ? formatLeverage(exitRow.leverageAfter) : '—'}
         </span>
         <span style={{ color: 'var(--text-dim)' }}>—</span>
         <span style={{ color: 'var(--text-muted)' }}>
-          −{(walkthrough.debtClear.dropFromEntryFraction * PCT_PER_FRACTION).toFixed(0)}%
+          {exitRow != null
+            ? `−${(exitRow.dropFromEntryFraction * PCT_PER_FRACTION).toFixed(0)}%`
+            : '—'}
         </span>
         <span style={{ color: DEBT_CLEAR_COLOR }}>
-          {(walkthrough.debtClear.sellFractionOfCurrentBps / BPS_PER_PCT).toFixed(0)}%
+          {exitRow != null ? `${(exitRow.sellFractionOfCurrent * PCT_PER_FRACTION).toFixed(0)}%` : '—'}
         </span>
         <span style={{ color: 'var(--text-muted)' }}>
-          {(walkthrough.debtClear.remainingFractionAfter * PCT_PER_FRACTION).toFixed(0)}%
+          {exitRow != null ? `${(exitRow.remainingFractionAfter * PCT_PER_FRACTION).toFixed(0)}%` : '—'}
         </span>
         <span style={{ color: 'var(--text-muted)' }}>
-          ${walkthrough.debtClear.proceedsUsd.toFixed(2)}
+          ${exitRow != null ? exitRow.proceedsUsd.toFixed(2) : '0.00'}
         </span>
-        <span style={{ color: DEBT_CLEAR_COLOR }}>$0.00</span>
+        <span style={{ color: DEBT_CLEAR_COLOR }}>
+          ${exitRow != null ? exitRow.loanAfterUsd.toFixed(2) : '0.00'}
+        </span>
       </div>
       <div style={{ padding: '2px 8px 0', fontSize: 9, color: DEBT_CLEAR_COLOR, opacity: 0.8 }}>
         Debt-clear exit (at most {formatCentsUsd(walkthrough.debtClearPriceUsd)} — falls as steps
@@ -461,10 +486,14 @@ function WalkthroughTable({
           <> On a straight decline it fires at ≈{formatCentsUsd(simulatedExit.priceUsd)}.</>
         )}
       </div>
-      {hasUnreachedSteps && (
+      {contingencyRows.length > 0 && (
         <div style={{ padding: '2px 8px 0', fontSize: 9, color: 'var(--text-dim)' }}>
-          Dimmed steps sit below where the exit would fire on a straight decline — they can only
-          fire on paths where earlier sales and recoveries pull the exit line down first.
+          + {contingencyRows.length} further pre-committed line
+          {contingencyRows.length === 1 ? '' : 's'} from{' '}
+          {formatCentsUsd(contingencyRows[0].triggerPriceUsd)} to{' '}
+          {formatCentsUsd(contingencyRows[contingencyRows.length - 1].triggerPriceUsd)}, below where
+          the exit fires — reached only if the price dips and partly recovers repeatedly; skipped on
+          a straight fall.
         </div>
       )}
 

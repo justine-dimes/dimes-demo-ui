@@ -106,19 +106,21 @@ describe('ScheduledDeleveragingPanel', () => {
     expect(summary.textContent).toContain('exit line falls as steps fire')
   })
 
-  it('renders every printed step with cumulative columns plus debt-clear and time-trim rows', () => {
+  it('renders the fired steps, the moved-down exit, the contingency note, and time-trims', () => {
     renderPanel()
     expect(screen.getByText('Loan after')).toBeInTheDocument()
-    // First step: proceeds $49.55, loan remaining $200.45, cadence gap for step 2 is 2.9¢.
+    // First step (fires): proceeds $49.55, loan remaining $200.45, gap-to-step-2 2.9¢.
     expect(screen.getByText('$49.55')).toBeInTheDocument()
     expect(screen.getByText('$200.45')).toBeInTheDocument()
     expect(screen.getAllByText('2.9¢').length).toBeGreaterThan(0)
-    // Debt-clear final row: repays the $109.67 left after all nine slices. The
-    // printed 27.5¢ is the at-entry worst case — the label must say so.
+    // The footnote keeps the at-entry worst case; the printed 27.5¢ falls as steps repay.
     expect(
       screen.getByText(/Debt-clear exit \(at most 27\.5¢ — falls as steps repay\)/),
     ).toBeInTheDocument()
-    expect(screen.getAllByText('$109.67').length).toBeGreaterThan(0)
+    // Steps below where the exit fires on a straight decline are summarised, not advertised.
+    expect(
+      screen.getByText(/further pre-committed line.*below where\s+the exit fires/s),
+    ).toBeInTheDocument()
     expect(screen.getByText(/At 50% of game time, regardless of price/)).toBeInTheDocument()
     expect(screen.getByText('sell 20%')).toBeInTheDocument()
   })
