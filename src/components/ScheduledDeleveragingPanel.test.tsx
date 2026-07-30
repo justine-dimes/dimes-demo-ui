@@ -123,11 +123,9 @@ describe('ScheduledDeleveragingPanel', () => {
     expect(screen.getByText('sell 20%')).toBeInTheDocument()
   })
 
-  it('renders both charts and the refundable deposit rows', () => {
+  it('renders the position-remaining chart and the refundable deposit rows', () => {
     renderPanel()
-    expect(screen.getByText('Price Ladder')).toBeInTheDocument()
     expect(screen.getByText('Position Remaining')).toBeInTheDocument()
-    expect(screen.getByText('quiet zone — no sales')).toBeInTheDocument()
     expect(screen.getByText('Safety deposit (refundable)')).toBeInTheDocument()
   })
 
@@ -176,10 +174,6 @@ describe('ScheduledDeleveragingPanel', () => {
     expect(screen.getByText('Engine vs Shadow Timeline')).toBeInTheDocument()
     expect(screen.getByText('Engine (actual)')).toBeInTheDocument()
     expect(screen.getByText('Schedule (shadow)')).toBeInTheDocument()
-    // Ladder legend for the two shadow-fired trigger lines.
-    expect(screen.getByText('✓ fired in shadow — recorded, not executed')).toBeInTheDocument()
-    expect(screen.getByText('sell 14% ✓')).toBeInTheDocument()
-    expect(screen.getByText('sell 11% ✓')).toBeInTheDocument()
     // Settlement strip, with the fill assumption spelled out.
     expect(screen.getByText('$187.12')).toBeInTheDocument()
     expect(screen.getByText('~$203.45')).toBeInTheDocument()

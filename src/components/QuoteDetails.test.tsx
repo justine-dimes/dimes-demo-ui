@@ -74,7 +74,6 @@ describe('QuoteDetails scheduled-deleveraging integration', () => {
     expect(screen.getByText('Standard (today)')).toBeInTheDocument()
     expect(screen.getByText('Scheduled (shadow preview)')).toBeInTheDocument()
     expect(screen.getByText('shadow — not yet executing')).toBeInTheDocument()
-    expect(screen.getByText('Price Ladder')).toBeInTheDocument()
     expect(screen.getByText('Position Remaining')).toBeInTheDocument()
     expect(screen.getByRole('slider', { name: 'What-if price' })).toBeInTheDocument()
     // The engine is still the real manager — its liquidation price stays a

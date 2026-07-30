@@ -7,9 +7,6 @@ export type ScheduleHoverKey = number | 'debt-clear' | null
 
 // Blue = the drawer's deleveraging accent (unwinding banner, unwind tooltips).
 export const DEBT_CLEAR_COLOR = '#5B9CF5'
-const ENTRY_MARKER_COLOR = 'rgba(255,255,255,0.45)'
-const CURRENT_MARKER_COLOR = '#44FF97'
-const QUIET_ZONE_FILL = 'rgba(68,255,151,0.06)'
 const HOVER_COLOR = 'var(--yellow)'
 const SCRUB_COLOR = 'rgba(238,255,0,0.55)'
 
@@ -18,10 +15,7 @@ const PAD_RIGHT = 34
 const PAD_TOP = 8
 const PAD_BOTTOM = 18
 const HEIGHT = 190
-const MIN_LABEL_PX = 12
 const DOMAIN_PAD_FRACTION = 0.06
-const STEP_BASE_STROKE_PX = 1
-const STEP_STROKE_PER_FULL_SELL_PX = 4
 const BPS_PER_UNIT = 10_000
 
 interface StaircaseDrop {
@@ -87,7 +81,6 @@ export function DeleverageScheduleCharts({
   scrubPriceUsd,
   hoverKey,
   onHoverKey,
-  shadowFiredKeys,
 }: {
   schedule: DeleverageScheduleView
   walkthrough: ScheduleWalkthrough | null
@@ -95,31 +88,13 @@ export function DeleverageScheduleCharts({
   scrubPriceUsd: number | null
   hoverKey: ScheduleHoverKey
   onHoverKey: (key: ScheduleHoverKey) => void
-  shadowFiredKeys?: ReadonlySet<string>
 }) {
   const entryPriceUsd = walkthrough?.basis.entryPriceUsd ?? null
   const domain = priceDomain(schedule, entryPriceUsd, currentPriceUsd)
   const drops = buildStaircaseDrops(schedule, walkthrough)
 
   return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))',
-        gap: 10,
-        marginTop: 10,
-      }}
-    >
-      <LadderChart
-        schedule={schedule}
-        domain={domain}
-        entryPriceUsd={entryPriceUsd}
-        currentPriceUsd={currentPriceUsd}
-        scrubPriceUsd={scrubPriceUsd}
-        hoverKey={hoverKey}
-        onHoverKey={onHoverKey}
-        shadowFiredKeys={shadowFiredKeys}
-      />
+    <div style={{ marginTop: 10 }}>
       <RemainingStaircaseChart
         drops={drops}
         domain={domain}
@@ -171,271 +146,6 @@ export function ChartFrame({
   )
 }
 
-interface AxisLabel {
-  priceUsd: number
-  text: string
-  color: string
-  priority: number
-}
-
-// `shadowFiredKeys` marks lines the shadow run has already fired: trigger
-// prices (the 4-decimal USD strings) plus 'debt-clear'. Keying on price, not
-// stepIndex, because the wire's stepIndex numbering interleaves time trims.
-function LadderChart({
-  schedule,
-  domain,
-  entryPriceUsd,
-  currentPriceUsd,
-  scrubPriceUsd,
-  hoverKey,
-  onHoverKey,
-  shadowFiredKeys,
-}: {
-  schedule: DeleverageScheduleView
-  domain: { max: number; min: number }
-  entryPriceUsd: number | null
-  currentPriceUsd: number | null
-  scrubPriceUsd: number | null
-  hoverKey: ScheduleHoverKey
-  onHoverKey: (key: ScheduleHoverKey) => void
-  shadowFiredKeys?: ReadonlySet<string>
-}) {
-  const { width, measureRef } = useMeasuredWidth(300)
-  const chartW = width - PAD_LEFT - PAD_RIGHT
-  const chartH = HEIGHT - PAD_TOP - PAD_BOTTOM
-  const range = domain.max - domain.min || 1
-  const toY = (priceUsd: number) => PAD_TOP + (1 - (priceUsd - domain.min) / range) * chartH
-
-  const debtClearPrice = parseFloat(schedule.debtClearPriceUsd)
-  const quietFloorPrice = parseFloat(schedule.entryBufferFloorPriceUsd)
-  const hasQuietZone = entryPriceUsd != null && entryPriceUsd > quietFloorPrice
-
-  const labelCandidates: AxisLabel[] = []
-  if (entryPriceUsd != null && Number.isFinite(entryPriceUsd)) {
-    labelCandidates.push({ priceUsd: entryPriceUsd, text: 'entry', color: 'var(--text-muted)', priority: 0 })
-  }
-  if (currentPriceUsd != null && Number.isFinite(currentPriceUsd)) {
-    labelCandidates.push({ priceUsd: currentPriceUsd, text: 'now', color: CURRENT_MARKER_COLOR, priority: 0 })
-  }
-  labelCandidates.push({
-    priceUsd: debtClearPrice,
-    text: formatCentsUsd(debtClearPrice),
-    color: DEBT_CLEAR_COLOR,
-    priority: 0,
-  })
-  for (const step of schedule.steps) {
-    labelCandidates.push({
-      priceUsd: parseFloat(step.triggerPriceUsd),
-      text: formatCentsUsd(step.triggerPriceUsd),
-      color: 'var(--text-dim)',
-      priority: 1,
-    })
-  }
-  labelCandidates.sort((a, b) => a.priority - b.priority)
-  const axisLabels: AxisLabel[] = []
-  for (const candidate of labelCandidates) {
-    const cy = toY(candidate.priceUsd)
-    const hasRoom = axisLabels.every((l) => Math.abs(toY(l.priceUsd) - cy) >= MIN_LABEL_PX)
-    if (hasRoom) axisLabels.push(candidate)
-  }
-
-  const handleMouseMove = (e: React.MouseEvent<SVGRectElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect()
-    const mouseY = e.clientY - rect.top + PAD_TOP
-    let closestKey: ScheduleHoverKey = null
-    let minDist = Infinity
-    for (const step of schedule.steps) {
-      const d = Math.abs(toY(parseFloat(step.triggerPriceUsd)) - mouseY)
-      if (d < minDist) {
-        minDist = d
-        closestKey = step.stepIndex
-      }
-    }
-    const debtClearDist = Math.abs(toY(debtClearPrice) - mouseY)
-    if (debtClearDist < minDist) closestKey = 'debt-clear'
-    onHoverKey(closestKey)
-  }
-
-  return (
-    <ChartFrame title="Price Ladder" measureRef={measureRef}>
-      <svg width={width} height={HEIGHT} style={{ display: 'block', overflow: 'visible' }}>
-        {/* Quiet zone — nothing fires between entry and the buffer floor */}
-        {hasQuietZone && (
-          <g>
-            <rect
-              x={PAD_LEFT}
-              y={toY(entryPriceUsd)}
-              width={Math.max(0, chartW)}
-              height={Math.max(0, toY(quietFloorPrice) - toY(entryPriceUsd))}
-              fill={QUIET_ZONE_FILL}
-            />
-            <text
-              x={PAD_LEFT + 6}
-              y={(toY(entryPriceUsd) + toY(quietFloorPrice)) / 2 + 3}
-              fontSize={9}
-              fontFamily="var(--font)"
-              fill="rgba(68,255,151,0.55)"
-            >
-              quiet zone — no sales
-            </text>
-          </g>
-        )}
-
-        {/* Step trigger lines — thickness scales with sell fraction */}
-        {schedule.steps.map((step) => {
-          const sy = toY(parseFloat(step.triggerPriceUsd))
-          const isHovered = hoverKey === step.stepIndex
-          const isCheckpoint = step.sellFractionBps === 0
-          const isShadowFired = shadowFiredKeys?.has(step.triggerPriceUsd) ?? false
-          return (
-            <g key={step.stepIndex}>
-              <line
-                x1={PAD_LEFT}
-                y1={sy}
-                x2={PAD_LEFT + chartW}
-                y2={sy}
-                stroke={isHovered ? HOVER_COLOR : 'rgba(255,255,255,0.7)'}
-                strokeWidth={
-                  STEP_BASE_STROKE_PX +
-                  (step.sellFractionBps / BPS_PER_UNIT) * STEP_STROKE_PER_FULL_SELL_PX +
-                  (isHovered ? 0.75 : 0)
-                }
-                strokeDasharray={isCheckpoint ? '2 3' : undefined}
-              />
-              {isShadowFired && (
-                <circle
-                  cx={PAD_LEFT + 7}
-                  cy={sy}
-                  r={3}
-                  fill={DEBT_CLEAR_COLOR}
-                  stroke="rgba(12,12,12,0.9)"
-                  strokeWidth={1}
-                />
-              )}
-              <text
-                x={PAD_LEFT + chartW + 4}
-                y={sy + 3}
-                textAnchor="start"
-                fontSize={9}
-                fontFamily="var(--font)"
-                fill={
-                  isHovered ? HOVER_COLOR : isShadowFired ? DEBT_CLEAR_COLOR : 'var(--text-muted)'
-                }
-              >
-                {isCheckpoint ? '–' : `sell ${(step.sellFractionBps / 100).toFixed(0)}%`}
-                {isShadowFired ? ' ✓' : ''}
-              </text>
-            </g>
-          )
-        })}
-
-        {/* Entry price marker */}
-        {entryPriceUsd != null && Number.isFinite(entryPriceUsd) && (
-          <line
-            x1={PAD_LEFT}
-            y1={toY(entryPriceUsd)}
-            x2={PAD_LEFT + chartW}
-            y2={toY(entryPriceUsd)}
-            stroke={ENTRY_MARKER_COLOR}
-            strokeWidth={1}
-            strokeDasharray="4 3"
-          />
-        )}
-
-        {/* Current price marker */}
-        {currentPriceUsd != null && Number.isFinite(currentPriceUsd) && (
-          <line
-            x1={PAD_LEFT}
-            y1={toY(currentPriceUsd)}
-            x2={PAD_LEFT + chartW}
-            y2={toY(currentPriceUsd)}
-            stroke={CURRENT_MARKER_COLOR}
-            strokeWidth={1}
-            strokeDasharray="4 3"
-          />
-        )}
-
-        {/* Debt-clear exit — emphasized. The printed line is the at-entry
-            worst case; the live line falls as steps repay, hence "max". */}
-        <g>
-          <line
-            x1={PAD_LEFT}
-            y1={toY(debtClearPrice)}
-            x2={PAD_LEFT + chartW}
-            y2={toY(debtClearPrice)}
-            stroke={DEBT_CLEAR_COLOR}
-            strokeWidth={hoverKey === 'debt-clear' ? 2.5 : 1.75}
-            strokeDasharray="6 3"
-          />
-          {(shadowFiredKeys?.has('debt-clear') ?? false) && (
-            <circle
-              cx={PAD_LEFT + 7}
-              cy={toY(debtClearPrice)}
-              r={3}
-              fill={DEBT_CLEAR_COLOR}
-              stroke="rgba(12,12,12,0.9)"
-              strokeWidth={1}
-            />
-          )}
-          <text
-            x={PAD_LEFT + chartW + 4}
-            y={toY(debtClearPrice) + 3}
-            textAnchor="start"
-            fontSize={9}
-            fontFamily="var(--font)"
-            fill={DEBT_CLEAR_COLOR}
-          >
-            {(shadowFiredKeys?.has('debt-clear') ?? false) ? 'max exit ✓' : 'max exit'}
-          </text>
-        </g>
-
-        {/* What-if scrub marker */}
-        {scrubPriceUsd != null && (
-          <line
-            x1={PAD_LEFT}
-            y1={toY(scrubPriceUsd)}
-            x2={PAD_LEFT + chartW}
-            y2={toY(scrubPriceUsd)}
-            stroke={SCRUB_COLOR}
-            strokeWidth={1.25}
-          />
-        )}
-
-        {/* Left-axis price labels */}
-        {axisLabels.map((label) => (
-          <text
-            key={`${label.text}-${label.priceUsd}`}
-            x={PAD_LEFT - 4}
-            y={toY(label.priceUsd) + 3}
-            textAnchor="end"
-            fontSize={9}
-            fontFamily="var(--font)"
-            fill={label.color}
-          >
-            {label.text}
-          </text>
-        ))}
-
-        {/* Invisible interaction layer */}
-        <rect
-          x={PAD_LEFT}
-          y={PAD_TOP}
-          width={Math.max(0, chartW)}
-          height={chartH}
-          fill="transparent"
-          onMouseMove={handleMouseMove}
-          onMouseLeave={() => onHoverKey(null)}
-          style={{ cursor: 'crosshair' }}
-        />
-      </svg>
-      {shadowFiredKeys != null && shadowFiredKeys.size > 0 && (
-        <div style={{ marginTop: 4, fontSize: 9, color: DEBT_CLEAR_COLOR, opacity: 0.85 }}>
-          ✓ fired in shadow — recorded, not executed
-        </div>
-      )}
-    </ChartFrame>
-  )
-}
 
 function RemainingStaircaseChart({
   drops,

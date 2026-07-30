@@ -69,17 +69,6 @@ export function ScheduledDeleveragingPanel({
 
   const [scrubPriceUsd, setScrubPriceUsd] = useState<number | null>(null)
 
-  // Ladder lines the shadow run has fired, keyed the way the ladder knows
-  // them: 4-decimal trigger-price strings plus 'debt-clear'.
-  const shadowFiredKeys = useMemo(() => {
-    if (shadowDeleverage == null || shadowDeleverage.steps.length === 0) return undefined
-    const keys = new Set<string>()
-    for (const step of shadowDeleverage.steps) {
-      keys.add(step.triggerKind === 'debtClear' ? 'debt-clear' : step.triggerPriceUsd)
-    }
-    return keys
-  }, [shadowDeleverage])
-
   return (
     <StatGroup label="Scheduled Deleveraging (shadow)" last={last}>
       {showComparison && liquidationPriceUsd != null && (
@@ -106,7 +95,6 @@ export function ScheduledDeleveragingPanel({
         scrubPriceUsd={scrubPriceUsd}
         hoverKey={hoverKey}
         onHoverKey={setHoverKey}
-        shadowFiredKeys={shadowFiredKeys}
       />
 
       {shadowDeleverage != null && (
