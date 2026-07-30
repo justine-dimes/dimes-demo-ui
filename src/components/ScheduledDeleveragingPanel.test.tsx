@@ -95,12 +95,13 @@ function renderPanel(extraProps: Partial<Parameters<typeof ScheduledDeleveraging
 describe('ScheduledDeleveragingPanel', () => {
   it('renders the computed plain-language summary', () => {
     renderPanel()
-    const summary = paragraphMatching(/Nothing happens above/)
+    const summary = paragraphMatching(/Nothing sells until/)
     expect(summary.textContent).toContain('$250.00')
     expect(summary.textContent).toContain('$75.76')
     expect(summary.textContent).toContain('$500.00 of YES at 51¢')
-    expect(summary.textContent).toContain('Nothing happens above 48.5¢')
-    expect(summary.textContent).toContain('first at 36¢ (14% of the position)')
+    expect(summary.textContent).toContain('Nothing sells until the first step at 36¢')
+    expect(summary.textContent).toContain('quiet zone in the 5% just below entry, to 48.5¢')
+    expect(summary.textContent).toContain('starting with 14% at that first step')
     expect(summary.textContent).toContain('at most 27.5¢')
     expect(summary.textContent).toContain('exit line falls as steps fire')
   })

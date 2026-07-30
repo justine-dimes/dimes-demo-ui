@@ -300,12 +300,14 @@ function PlanSummary({
       refundable deposit and control{' '}
       <strong style={{ color: 'var(--text)' }}>${basis.notionalUsd.toFixed(2)}</strong> {positionPhrase} at{' '}
       <strong style={{ color: 'var(--text)' }}>{formatCentsUsd(basis.entryPriceUsd)}</strong>. Nothing
-      happens above{' '}
-      <strong style={{ color: 'var(--text)' }}>{formatCentsUsd(walkthrough.quietZoneFloorUsd)}</strong>{' '}
-      (your quiet zone). If the price falls, the plan sells small pre-set slices at the{' '}
-      {schedule.steps.length} printed prices below — first at{' '}
+      sells until the first step at{' '}
       <strong style={{ color: 'var(--text)' }}>{formatCentsUsd(firstStep.triggerPriceUsd)}</strong>{' '}
-      ({(firstStep.sellFractionBps / BPS_PER_PCT).toFixed(0)}% of the position). A debt-clear exit
+      — the whole band from entry down to there stays untouched (including a hard no-sell quiet zone
+      in the 5% just below entry, to{' '}
+      <strong style={{ color: 'var(--text)' }}>{formatCentsUsd(walkthrough.quietZoneFloorUsd)}</strong>).
+      If the price keeps falling, the plan sells small pre-set slices at the{' '}
+      {schedule.steps.length} printed prices, starting with{' '}
+      {(firstStep.sellFractionBps / BPS_PER_PCT).toFixed(0)}% at that first step. A debt-clear exit
       sells just enough to repay the loan entirely at{' '}
       <strong style={{ color: DEBT_CLEAR_COLOR }}>
         at most {formatCentsUsd(walkthrough.debtClearPriceUsd)}
