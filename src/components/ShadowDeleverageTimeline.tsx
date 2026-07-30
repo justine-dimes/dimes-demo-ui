@@ -5,8 +5,10 @@ import type {
 } from '../api/scheduled-deleveraging.types'
 import type { PositionUnwind, PositionUnwindList } from '../api/types'
 import { formatCentsUsd } from '../utils/deleverageSchedule'
-import { ChartFrame, DEBT_CLEAR_COLOR } from './DeleverageScheduleCharts'
 import { useMeasuredWidth } from './useMeasuredWidth'
+
+// Blue = the drawer's deleveraging accent (unwinding banner, unwind tooltips).
+export const DEBT_CLEAR_COLOR = '#5B9CF5'
 
 // ---------------------------------------------------------------------------
 // Engine vs shadow, over time. Engine unwinds carry timestamps and leverage
@@ -74,6 +76,44 @@ function shadowStepTitle(step: ShadowDeleverageStepView): string {
   return step.triggerKind === 'debtClear'
     ? 'Shadow debt-clear exit'
     : `Shadow step ${step.stepIndex + 1}`
+}
+
+function ChartFrame({
+  title,
+  measureRef,
+  children,
+}: {
+  title: string
+  measureRef: (node: HTMLDivElement | null) => void
+  children: React.ReactNode
+}) {
+  return (
+    <div
+      style={{
+        background: 'rgba(255,255,255,0.04)',
+        border: '1px solid rgba(255,255,255,0.1)',
+        borderRadius: 0,
+        padding: '12px 14px',
+        minWidth: 0,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 600,
+          color: 'var(--text)',
+          marginBottom: 10,
+          textTransform: 'uppercase',
+          letterSpacing: '0.06em',
+        }}
+      >
+        {title}
+      </div>
+      <div ref={measureRef} style={{ width: '100%' }}>
+        {children}
+      </div>
+    </div>
+  )
 }
 
 export function ShadowDeleverageTimeline({

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import type {
   DeleverageScheduleView,
@@ -93,101 +93,46 @@ function renderPanel(extraProps: Partial<Parameters<typeof ScheduledDeleveraging
 }
 
 describe('ScheduledDeleveragingPanel', () => {
-  it('renders the computed plain-language summary', () => {
-    renderPanel()
-    const summary = paragraphMatching(/Nothing sells until/)
-    expect(summary.textContent).toContain('$250.00')
-    expect(summary.textContent).toContain('$75.76')
-    expect(summary.textContent).toContain('$500.00 of YES at 51¢')
-    expect(summary.textContent).toContain('Nothing sells until the first step at 36¢')
-    expect(summary.textContent).toContain('quiet zone in the 5% just below entry, to 48.5¢')
-    expect(summary.textContent).toContain('starting with 14% at that first step')
-    expect(summary.textContent).toContain('at most 27.5¢')
-    expect(summary.textContent).toContain('exit line falls as steps fire')
-  })
-
-  it('renders every printed step, the static debt-clear row, and time-trims', () => {
-    renderPanel()
-    expect(screen.getByText('Loan after')).toBeInTheDocument()
-    // First step: proceeds $49.55, loan remaining $200.45, gap-to-step-2 2.9¢.
-    expect(screen.getByText('$49.55')).toBeInTheDocument()
-    expect(screen.getByText('$200.45')).toBeInTheDocument()
-    expect(screen.getAllByText('2.9¢').length).toBeGreaterThan(0)
-    // A deep printed step is still shown (no fired/contingency filtering). In
-    // this pre-gate fixture the debt-clear (27.5¢) sits above the deepest step
-    // (12.6¢), so 12.6¢ is the chart's lowest-price x-axis label too.
-    expect(screen.getAllByText('12.6¢').length).toBeGreaterThan(0)
-    // The debt-clear row shows the static at-entry values: 27.5¢, loan fully repaid.
-    expect(screen.getAllByText('27.5¢').length).toBeGreaterThan(0)
-    // The footnote keeps the at-entry worst case; the printed 27.5¢ is the bound.
-    expect(
-      screen.getByText(/Debt-clear exit \(at most 27\.5¢ — falls as steps repay\)/),
-    ).toBeInTheDocument()
-    // No straight-decline simulation clause and no contingency summary anymore.
-    expect(screen.queryByText(/On a straight decline/)).not.toBeInTheDocument()
-    expect(screen.queryByText(/further pre-committed line/)).not.toBeInTheDocument()
-    expect(screen.getByText(/At 50% of game time, regardless of price/)).toBeInTheDocument()
-    expect(screen.getByText('sell 20%')).toBeInTheDocument()
-  })
-
-  it('has no leverage column in the step table', () => {
-    renderPanel()
-    expect(screen.getByText('Loan after')).toBeInTheDocument()
-    expect(screen.queryByText('Lev')).not.toBeInTheDocument()
-  })
-
-  it('reports the true maximum single-step sell fraction in the summary', () => {
-    renderPanel()
-    // Max sellFractionBps across steps is 1404 (step 0) = 14%.
-    const summary = paragraphMatching(/no step sells more than/)
-    expect(summary.textContent).toContain('no step sells more than 14% of what you still hold')
-  })
-
-  it('renders the position-remaining chart and the refundable deposit rows', () => {
-    renderPanel()
-    expect(screen.getByText('Position Remaining')).toBeInTheDocument()
-    expect(screen.getByText('Safety deposit (refundable)')).toBeInTheDocument()
-  })
-
-  it('narrates the cumulative what-if state as the scrubber moves', () => {
-    renderPanel()
-    const slider = screen.getByRole('slider')
-
-    fireEvent.change(slider, { target: { value: '0.33' } })
-    const midLadder = paragraphMatching(/At 33¢:/)
-    expect(midLadder.textContent).toContain('2 of 9 steps have fired')
-    expect(midLadder.textContent).toContain('76%')
-    expect(midLadder.textContent).toContain('$169.75')
-    // Steps have fired, so the backstop is presented as a bound, not a live price.
-    expect(midLadder.textContent).toContain('backstop is at most 27.5¢')
-    expect(midLadder.textContent).toContain('moves lower as steps repay')
-    expect(midLadder.textContent).toContain('step at 30.2¢')
-
-    fireEvent.change(slider, { target: { value: '0.5' } })
-    expect(paragraphMatching(/inside your quiet zone/).textContent).toContain(
-      'loan is unchanged at $250.00',
-    )
-
-    fireEvent.change(slider, { target: { value: '0.2' } })
-    const belowExit = paragraphMatching(/At 20¢:/)
-    expect(belowExit.textContent).toContain('debt-clear exit')
-    expect(belowExit.textContent).toContain('loan is fully repaid')
-  })
-
-  it('frames the comparison as a shadow preview, never something the user selected', () => {
+  it('frames the comparison as two parallel single-price cards, exit vs liquidation', () => {
     const { unmount } = renderPanel({ liquidationPriceUsd: '0.42', showComparison: true })
     expect(screen.getByText('Standard (today)')).toBeInTheDocument()
     expect(screen.getByText('Scheduled (shadow preview)')).toBeInTheDocument()
     expect(screen.getByText('shadow — not yet executing')).toBeInTheDocument()
+    // Both cards headline a single price: standard liquidation vs scheduled exit.
     expect(screen.getByText('42¢ liquidation')).toBeInTheDocument()
-    expect(screen.getByText('9 printed steps')).toBeInTheDocument()
+    expect(screen.getByText('27.5¢ exit')).toBeInTheDocument()
     unmount()
 
     renderPanel()
     expect(screen.queryByText('Standard (today)')).not.toBeInTheDocument()
   })
 
-  it('overlays shadow fires on the ladder and renders the engine-vs-shadow timeline', () => {
+  it('renders the short essentials line (entry, deposit, exit) under the cards', () => {
+    renderPanel({ liquidationPriceUsd: '0.42', showComparison: true })
+    const essentials = paragraphMatching(/Entry .*deposit .*exit/)
+    expect(essentials.textContent).toContain('Entry 51¢')
+    expect(essentials.textContent).toContain('$75.76 refundable')
+    expect(essentials.textContent).toContain('exit 27.5¢')
+  })
+
+  it('renders the refundable deposit rows', () => {
+    renderPanel()
+    expect(screen.getByText('Safety deposit (refundable)')).toBeInTheDocument()
+    // Deposit required + collected are both $75.76 in this fixture.
+    expect(screen.getAllByText('$75.76')).toHaveLength(2)
+    expect(screen.getByText(/Collected/)).toBeInTheDocument()
+  })
+
+  it('no longer renders the step table, ladder chart, or what-if scrubber', () => {
+    renderPanel({ liquidationPriceUsd: '0.42', showComparison: true })
+    expect(screen.queryByText('Loan after')).not.toBeInTheDocument()
+    expect(screen.queryByText('Position Remaining')).not.toBeInTheDocument()
+    expect(screen.queryByRole('slider')).not.toBeInTheDocument()
+    expect(screen.queryByText(/What if the price fell to/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/printed steps/)).not.toBeInTheDocument()
+  })
+
+  it('renders the engine-vs-shadow timeline on positions', () => {
     renderPanel({ shadowDeleverage, unwinds })
 
     expect(screen.getByText('Engine vs Shadow Timeline')).toBeInTheDocument()
@@ -218,60 +163,5 @@ describe('ScheduledDeleveragingPanel', () => {
     renderPanel()
     expect(screen.queryByText('Engine vs Shadow Timeline')).not.toBeInTheDocument()
     expect(screen.queryByText(/fired in shadow/)).not.toBeInTheDocument()
-  })
-
-  it('falls back to the schedule-only table when the position numbers are unusable', () => {
-    renderPanel({ basis: { ...basis, entryPriceUsd: 'not-a-number' } })
-    expect(screen.getByText('Trigger price')).toBeInTheDocument()
-    expect(screen.queryByText('Loan after')).not.toBeInTheDocument()
-    expect(screen.queryByRole('slider')).not.toBeInTheDocument()
-  })
-})
-
-// Backstop-above-ladder: the debt-clear backstop (32.5¢) sits ABOVE the first
-// printed step (31.5¢). The backstop fires first on a decline and repays the
-// loan; the steps below are committed but never reached.
-const aboveLadderSchedule: DeleverageScheduleView = {
-  entryBufferFloorPriceUsd: '0.4845',
-  steps: [
-    { stepIndex: 0, triggerPriceUsd: '0.3150', sellFractionBps: 1500 },
-    { stepIndex: 1, triggerPriceUsd: '0.2790', sellFractionBps: 1200 },
-    { stepIndex: 2, triggerPriceUsd: '0.2430', sellFractionBps: 1000 },
-  ],
-  debtClearPriceUsd: '0.3250',
-  safetyDepositRequiredUsd: '75.76',
-  safetyDepositCollectedUsd: '75.76',
-}
-
-describe('ScheduledDeleveragingPanel — backstop-above-ladder', () => {
-  function renderAboveLadder() {
-    return render(
-      <ScheduledDeleveragingPanel schedule={aboveLadderSchedule} basis={basis} side="yes" />,
-    )
-  }
-
-  it('summary says nothing sells until the backstop, and drops the "falls as steps repay" clause', () => {
-    renderAboveLadder()
-    const summary = paragraphMatching(/Nothing sells until/)
-    expect(summary.textContent).toContain('Nothing sells until the backstop at 32.5¢')
-    expect(summary.textContent).toContain('which repays your loan')
-    expect(summary.textContent).not.toContain('exit line falls as steps fire')
-  })
-
-  it('shows the not-reached note and keeps the deeper committed steps visible', () => {
-    renderAboveLadder()
-    expect(
-      screen.getByText(
-        /Steps below the backstop are your committed plan but aren't reached here/,
-      ),
-    ).toBeInTheDocument()
-    // The deeper committed steps are still rendered (dimmed, not hidden).
-    expect(screen.getAllByText('31.5¢').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('24.3¢').length).toBeGreaterThan(0)
-    // The backstop uses the "at" framing, not the at-entry "at most … falls" one.
-    expect(
-      screen.getByText(/Debt-clear backstop \(at 32\.5¢\)/),
-    ).toBeInTheDocument()
-    expect(screen.queryByText(/falls as steps repay/)).not.toBeInTheDocument()
   })
 })

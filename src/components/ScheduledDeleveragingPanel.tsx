@@ -1,45 +1,19 @@
-import { useMemo, useState } from 'react'
 import type {
   DeleverageScheduleView,
-  DeleverageScheduleStep,
   ShadowDeleverageView,
 } from '../api/scheduled-deleveraging.types'
 import type { PositionUnwindList } from '../api/types'
-import type {
-  ScheduleBasisInput,
-  ScheduleWalkthrough,
-} from '../utils/deleverageSchedule'
-import {
-  buildCoherentEvents,
-  buildScheduleWalkthrough,
-  formatCentsUsd,
-  parseScheduleBasis,
-  scheduleStateAtPrice,
-} from '../utils/deleverageSchedule'
+import type { ScheduleBasisInput } from '../utils/deleverageSchedule'
+import { formatCentsUsd } from '../utils/deleverageSchedule'
 import { StatRow } from './StatRow'
 import { StatGroup } from './CardViewParts'
-import {
-  DeleverageScheduleCharts,
-  DEBT_CLEAR_COLOR,
-  type ScheduleHoverKey,
-} from './DeleverageScheduleCharts'
-import { ShadowDeleverageTimeline } from './ShadowDeleverageTimeline'
+import { DEBT_CLEAR_COLOR, ShadowDeleverageTimeline } from './ShadowDeleverageTimeline'
 
 const LIQUIDATION_COLOR = '#F5A623'
-const PCT_PER_FRACTION = 100
-const BPS_PER_PCT = 100
-
-const cellFont = {
-  fontSize: 11,
-  fontVariantNumeric: 'tabular-nums',
-  whiteSpace: 'nowrap',
-} as const
 
 export function ScheduledDeleveragingPanel({
   schedule,
   basis,
-  side,
-  currentPriceUsd,
   liquidationPriceUsd,
   showComparison,
   shadowDeleverage,
@@ -56,58 +30,18 @@ export function ScheduledDeleveragingPanel({
   unwinds?: PositionUnwindList
   last?: boolean
 }) {
-  const walkthrough = useMemo(() => {
-    const parsed = parseScheduleBasis(basis)
-    return parsed ? buildScheduleWalkthrough(schedule, parsed) : null
-  }, [schedule, basis])
-
-  const [hoverKey, setHoverKey] = useState<ScheduleHoverKey>(null)
-
-  const currentPrice = currentPriceUsd != null ? parseFloat(currentPriceUsd) : null
-  const usableCurrentPrice =
-    currentPrice != null && Number.isFinite(currentPrice) ? currentPrice : null
-
-  const [scrubPriceUsd, setScrubPriceUsd] = useState<number | null>(null)
-
   return (
     <StatGroup label="Scheduled Deleveraging (shadow)" last={last}>
       {showComparison && liquidationPriceUsd != null && (
-        <ProtectionComparison
-          schedule={schedule}
-          walkthrough={walkthrough}
-          liquidationPriceUsd={liquidationPriceUsd}
-        />
+        <ProtectionComparison schedule={schedule} liquidationPriceUsd={liquidationPriceUsd} />
       )}
 
-      {walkthrough && <PlanSummary schedule={schedule} walkthrough={walkthrough} side={side} />}
-
-      <WalkthroughTable
-        schedule={schedule}
-        walkthrough={walkthrough}
-        hoverKey={hoverKey}
-        onHoverKey={setHoverKey}
-      />
-
-      <DeleverageScheduleCharts
-        schedule={schedule}
-        walkthrough={walkthrough}
-        currentPriceUsd={usableCurrentPrice}
-        scrubPriceUsd={scrubPriceUsd}
-        hoverKey={hoverKey}
-        onHoverKey={setHoverKey}
-      />
+      {showComparison && liquidationPriceUsd != null && (
+        <EssentialsLine schedule={schedule} basis={basis} />
+      )}
 
       {shadowDeleverage != null && (
         <ShadowDeleverageTimeline shadow={shadowDeleverage} unwinds={unwinds} />
-      )}
-
-      {walkthrough && (
-        <WhatIfScrubber
-          walkthrough={walkthrough}
-          initialPriceUsd={usableCurrentPrice}
-          scrubPriceUsd={scrubPriceUsd}
-          onScrub={setScrubPriceUsd}
-        />
       )}
 
       <div style={{ marginTop: 8 }}>
@@ -125,24 +59,23 @@ export function ScheduledDeleveragingPanel({
 
 // ---------------------------------------------------------------------------
 // Engine vs schedule, side by side, in plain language. Shadow framing: the
-// engine still manages every position; the schedule card previews the
-// proposed mechanism the API now computes and runs in shadow on every
-// eligible quote — nothing the user selected, nothing that executes.
+// engine still manages every position; the schedule card previews the proposed
+// mechanism the API now computes and runs in shadow on every eligible quote —
+// nothing the user selected, nothing that executes.
+//
+// The two cards are parallel: each headlines a single price (the standard
+// liquidation vs the scheduled exit). The rung ladder is deliberately dropped —
+// for a naked guard, gradual cutting destroys value; the product is a
+// deposit-backed backstop that repays the loan, so we present exactly that.
 // ---------------------------------------------------------------------------
 
 function ProtectionComparison({
   schedule,
-  walkthrough,
   liquidationPriceUsd,
 }: {
   schedule: DeleverageScheduleView
-  walkthrough: ScheduleWalkthrough | null
   liquidationPriceUsd: string
 }) {
-  const stepCount = schedule.steps.length
-  const firstTrigger = schedule.steps[0]?.triggerPriceUsd
-  const lastTrigger = schedule.steps[stepCount - 1]?.triggerPriceUsd
-
   const cardStyle = {
     border: '1px solid rgba(255,255,255,0.1)',
     background: 'rgba(255,255,255,0.02)',
@@ -161,6 +94,12 @@ function ProtectionComparison({
     lineHeight: 1.5,
     color: 'var(--text-muted)',
   } as const
+  const headlineStyle = {
+    fontSize: 15,
+    fontWeight: 600,
+    fontVariantNumeric: 'tabular-nums',
+    marginBottom: 6,
+  } as const
 
   return (
     <div
@@ -173,15 +112,7 @@ function ProtectionComparison({
     >
       <div style={cardStyle}>
         <div style={{ ...headStyle, color: 'var(--text-dim)' }}>Standard (today)</div>
-        <div
-          style={{
-            fontSize: 15,
-            fontWeight: 600,
-            color: LIQUIDATION_COLOR,
-            fontVariantNumeric: 'tabular-nums',
-            marginBottom: 6,
-          }}
-        >
+        <div style={{ ...headlineStyle, color: LIQUIDATION_COLOR }}>
           {formatCentsUsd(liquidationPriceUsd)} liquidation
         </div>
         <div style={bodyStyle}>
@@ -218,32 +149,14 @@ function ProtectionComparison({
             shadow — not yet executing
           </span>
         </div>
-        <div
-          style={{
-            fontSize: 15,
-            fontWeight: 600,
-            color: 'var(--text)',
-            fontVariantNumeric: 'tabular-nums',
-            marginBottom: 6,
-          }}
-        >
-          {stepCount} printed steps
-          {firstTrigger != null && lastTrigger != null && (
-            <span style={{ color: 'var(--text-muted)', fontWeight: 500 }}>
-              {' '}· {formatCentsUsd(firstTrigger)} → {formatCentsUsd(lastTrigger)}
-            </span>
-          )}
+        <div style={{ ...headlineStyle, color: DEBT_CLEAR_COLOR }}>
+          {formatCentsUsd(schedule.debtClearPriceUsd)} exit
         </div>
         <div style={bodyStyle}>
-          A preview of the proposed mechanism, computed automatically for every eligible quote
-          and run in shadow alongside the engine. Only the pre-committed slices below would
-          ever fire, plus a debt-clear exit at most{' '}
-          <span style={{ color: DEBT_CLEAR_COLOR }}>{formatCentsUsd(schedule.debtClearPriceUsd)}</span>{' '}
-          (the line falls as steps repay). Would be backed by a $
-          {walkthrough ? walkthrough.safetyDepositUsd.toFixed(2) : schedule.safetyDepositRequiredUsd}{' '}
-          refundable deposit — the deeper lines are safe to promise <em>because</em> of that
-          deposit; the standard liquidation price at left assumes collateral only. Every sale
-          visible before it could ever happen.
+          One exit price. There, the schedule sells just enough to repay your loan — you keep any
+          sliver of value beyond that. It&apos;s backed by a ${schedule.safetyDepositRequiredUsd}{' '}
+          refundable deposit, which also buffers a gap past the exit. Worst case you lose your
+          collateral and the deposit comes back — unless a crash gaps clean past the exit.
         </div>
       </div>
     </div>
@@ -251,481 +164,32 @@ function ProtectionComparison({
 }
 
 // ---------------------------------------------------------------------------
-// Plain-language summary, computed from the schedule + position numbers.
+// One plain-language line with the essentials: entry, deposit, exit.
 // ---------------------------------------------------------------------------
 
-function PlanSummary({
+function EssentialsLine({
   schedule,
-  walkthrough,
-  side,
+  basis,
 }: {
   schedule: DeleverageScheduleView
-  walkthrough: ScheduleWalkthrough
-  side?: 'yes' | 'no'
+  basis: ScheduleBasisInput
 }) {
-  const { basis } = walkthrough
-  const firstStep = schedule.steps[0]
-  const positionPhrase = side != null ? `of ${side.toUpperCase()}` : 'of the position'
-  const spacings = walkthrough.stepRows
-    .map((row) => row.spacingUsd)
-    .filter((gap): gap is number => gap != null)
-    .sort((a, b) => a - b)
-  const medianSpacingUsd = spacings.length > 0 ? spacings[Math.floor(spacings.length / 2)] : null
-  const maxSellPct = Math.max(...schedule.steps.map((s) => s.sellFractionBps)) / BPS_PER_PCT
-
-  // The first thing to fire on a decline is the highest-price event, which is
-  // the backstop for backstop-above-ladder positions and a step otherwise.
-  const events = buildCoherentEvents(walkthrough)
-  const firstEvent = events[0]
-  const backstopFiresFirst = firstEvent.kind === 'debt-clear'
-
+  const strong = { color: 'var(--text)' } as const
   return (
     <p
       style={{
-        margin: '4px 0 10px',
+        margin: '0 0 10px',
         fontSize: 12,
         lineHeight: 1.6,
         color: 'var(--text-muted)',
       }}
     >
-      Under this plan you'd put in{' '}
-      <strong style={{ color: 'var(--text)' }}>${basis.collateralUsd.toFixed(2)}</strong> + a{' '}
-      <strong style={{ color: 'var(--text)' }}>${walkthrough.safetyDepositUsd.toFixed(2)}</strong>{' '}
-      refundable deposit and control{' '}
-      <strong style={{ color: 'var(--text)' }}>${basis.notionalUsd.toFixed(2)}</strong> {positionPhrase} at{' '}
-      <strong style={{ color: 'var(--text)' }}>{formatCentsUsd(basis.entryPriceUsd)}</strong>.{' '}
-      {backstopFiresFirst ? (
-        <>
-          Nothing sells until the backstop at{' '}
-          <strong style={{ color: DEBT_CLEAR_COLOR }}>
-            {formatCentsUsd(walkthrough.debtClearPriceUsd)}
-          </strong>
-          , which repays your loan
-        </>
-      ) : (
-        <>
-          Nothing sells until the first step at{' '}
-          <strong style={{ color: 'var(--text)' }}>{formatCentsUsd(firstStep.triggerPriceUsd)}</strong>
-        </>
-      )}{' '}
-      — the whole band from entry down to there stays untouched (including a hard no-sell quiet zone
-      in the 5% just below entry, to{' '}
-      <strong style={{ color: 'var(--text)' }}>{formatCentsUsd(walkthrough.quietZoneFloorUsd)}</strong>).
-      If the price keeps falling, the plan sells small pre-set slices at the{' '}
-      {schedule.steps.length} printed prices, starting with{' '}
-      {(firstStep.sellFractionBps / BPS_PER_PCT).toFixed(0)}% at that first step. A debt-clear exit
-      sells just enough to repay the loan entirely at{' '}
+      Entry <strong style={strong}>{formatCentsUsd(basis.entryPriceUsd)}</strong> · deposit{' '}
+      <strong style={strong}>${schedule.safetyDepositRequiredUsd}</strong> refundable · exit{' '}
       <strong style={{ color: DEBT_CLEAR_COLOR }}>
-        {backstopFiresFirst
-          ? formatCentsUsd(walkthrough.debtClearPriceUsd)
-          : `at most ${formatCentsUsd(walkthrough.debtClearPriceUsd)}`}
+        {formatCentsUsd(schedule.debtClearPriceUsd)}
       </strong>
-      {backstopFiresFirst ? (
-        <>.</>
-      ) : (
-        <> — each slice repays part of the loan, so the exit line falls as steps fire.</>
-      )}
-      {medianSpacingUsd != null && (
-        <>
-          {' '}
-          Steps sit about{' '}
-          <strong style={{ color: 'var(--text)' }}>{formatCentsUsd(medianSpacingUsd)}</strong> apart
-          (spacing is set per market; no step sells more than {maxSellPct.toFixed(0)}% of what you
-          still hold).
-        </>
-      )}{' '}
-      Worst case you lose your collateral; the deposit comes back unless a crash gaps past the
-      exit line.
+      .
     </p>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// The full step-by-step plan, with cumulative columns and explicit cadence.
-// ---------------------------------------------------------------------------
-
-const TABLE_GRID_COLUMNS = '22px 52px 44px 44px 40px 44px 54px 58px'
-
-function WalkthroughTable({
-  schedule,
-  walkthrough,
-  hoverKey,
-  onHoverKey,
-}: {
-  schedule: DeleverageScheduleView
-  walkthrough: ScheduleWalkthrough | null
-  hoverKey: ScheduleHoverKey
-  onHoverKey: (key: ScheduleHoverKey) => void
-}) {
-  if (!walkthrough) return <SimpleStepTable steps={schedule.steps} />
-
-  // One coherent price-sweep drives both table and chart: steps + backstop in
-  // price order, with events below a loan-repaying backstop marked not-reached.
-  const events = buildCoherentEvents(walkthrough)
-  const entryPriceUsd = walkthrough.basis.entryPriceUsd
-  const hasUnreachedEvents = events.some((event) => !event.reached)
-  const isBackstopAboveLadder = events[0]?.kind === 'debt-clear'
-
-  const rowStyle = (key: ScheduleHoverKey) =>
-    ({
-      display: 'grid',
-      gridTemplateColumns: TABLE_GRID_COLUMNS,
-      gap: 6,
-      padding: '3px 8px',
-      background: hoverKey != null && hoverKey === key ? 'rgba(238,255,0,0.07)' : 'transparent',
-      cursor: 'default',
-    }) as const
-
-  return (
-    <div
-      style={{
-        margin: '6px 0',
-        border: '1px solid rgba(255,255,255,0.08)',
-        background: 'rgba(255,255,255,0.02)',
-        padding: '6px 0',
-        overflowX: 'auto',
-      }}
-    >
-      <div
-        style={{
-          ...rowStyle(null),
-          color: 'var(--text-dim)',
-          fontSize: 9,
-          textTransform: 'uppercase',
-          letterSpacing: '0.05em',
-        }}
-      >
-        <span>#</span>
-        <span>Trigger</span>
-        <span>Gap</span>
-        <span>Drop</span>
-        <span>Sell</span>
-        <span>Left</span>
-        <span>Proceeds</span>
-        <span>Loan after</span>
-      </div>
-
-      {events.map((event, index) => {
-        const key: ScheduleHoverKey = event.kind === 'debt-clear' ? 'debt-clear' : event.stepIndex!
-        const isDebtClear = event.kind === 'debt-clear'
-        const previousPriceUsd = index > 0 ? events[index - 1].priceUsd : null
-        const gapUsd = previousPriceUsd != null ? previousPriceUsd - event.priceUsd : null
-        const dropFromEntryFraction = 1 - event.priceUsd / entryPriceUsd
-        const proceedsUsd = event.tokensSold * event.priceUsd
-        const sellPct = event.sellFractionOfCurrent * PCT_PER_FRACTION
-        const dimStyle = event.reached ? {} : { opacity: 0.45 }
-        const accent = isDebtClear ? DEBT_CLEAR_COLOR : 'var(--text)'
-        const rowNumber = isDebtClear ? '⏻' : `${event.stepIndex! + 1}`
-        return (
-          <div
-            key={String(key)}
-            style={{
-              ...rowStyle(key),
-              ...cellFont,
-              ...dimStyle,
-              ...(isDebtClear
-                ? { borderTop: '1px solid rgba(91,156,245,0.25)', marginTop: 3, paddingTop: 5 }
-                : {}),
-            }}
-            onMouseEnter={() => onHoverKey(key)}
-            onMouseLeave={() => onHoverKey(null)}
-          >
-            <span style={{ color: isDebtClear ? DEBT_CLEAR_COLOR : 'var(--text-muted)' }}>
-              {rowNumber}
-            </span>
-            <span style={{ color: accent }}>{formatCentsUsd(event.priceUsd)}</span>
-            <span style={{ color: 'var(--text-dim)' }}>
-              {gapUsd != null ? formatCentsUsd(gapUsd) : '—'}
-            </span>
-            <span style={{ color: 'var(--text-muted)' }}>
-              −{(dropFromEntryFraction * PCT_PER_FRACTION).toFixed(0)}%
-            </span>
-            <span style={{ color: sellPct === 0 ? 'var(--text-dim)' : accent }}>
-              {sellPct.toFixed(0)}%
-            </span>
-            <span style={{ color: 'var(--text-muted)' }}>
-              {(event.remainingFractionAfter * PCT_PER_FRACTION).toFixed(0)}%
-            </span>
-            <span style={{ color: 'var(--text-muted)' }}>${proceedsUsd.toFixed(2)}</span>
-            <span style={{ color: isDebtClear ? DEBT_CLEAR_COLOR : 'var(--text)' }}>
-              ${event.loanAfterUsd.toFixed(2)}
-            </span>
-          </div>
-        )
-      })}
-
-      <div style={{ padding: '2px 8px 0', fontSize: 9, color: DEBT_CLEAR_COLOR, opacity: 0.8 }}>
-        {isBackstopAboveLadder ? (
-          <>
-            Debt-clear backstop (at {formatCentsUsd(walkthrough.debtClearPriceUsd)}) — sells just
-            enough to repay the loan in full.
-          </>
-        ) : (
-          <>
-            Debt-clear exit (at most {formatCentsUsd(walkthrough.debtClearPriceUsd)} — falls as steps
-            repay) — sells just enough to repay the loan in full. The printed price is the at-entry
-            worst case.
-          </>
-        )}
-      </div>
-      {hasUnreachedEvents && (
-        <div style={{ padding: '2px 8px 0', fontSize: 9, color: 'var(--text-dim)' }}>
-          Steps below the backstop are your committed plan but aren't reached here — the backstop
-          repays the loan first.
-        </div>
-      )}
-
-      {schedule.timeTrims?.map((trim) => (
-        <div
-          key={trim.triggerElapsedFraction}
-          style={{
-            display: 'grid',
-            gridTemplateColumns: '22px 1fr 44px',
-            gap: 6,
-            padding: '4px 8px 1px',
-            ...cellFont,
-            borderTop: '1px dashed rgba(255,255,255,0.08)',
-            marginTop: 3,
-          }}
-        >
-          <span style={{ color: 'var(--text-dim)' }}>◷</span>
-          <span style={{ color: 'var(--text-muted)', whiteSpace: 'normal' }}>
-            At {(trim.triggerElapsedFraction * PCT_PER_FRACTION).toFixed(0)}% of game time,
-            regardless of price
-          </span>
-          <span style={{ color: 'var(--text)', textAlign: 'right' }}>
-            sell {(trim.trimFractionBps / BPS_PER_PCT).toFixed(0)}%
-          </span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-// Fallback when the position numbers can't be parsed — schedule-only columns.
-function SimpleStepTable({ steps }: { steps: DeleverageScheduleStep[] }) {
-  const gridStyle = {
-    display: 'grid',
-    gridTemplateColumns: '36px 1fr auto',
-    gap: 8,
-    padding: '3px 10px',
-  }
-  return (
-    <div
-      style={{
-        margin: '6px 0',
-        border: '1px solid rgba(255,255,255,0.08)',
-        background: 'rgba(255,255,255,0.02)',
-        padding: '6px 0',
-      }}
-    >
-      <div
-        style={{
-          ...gridStyle,
-          color: 'var(--text-dim)',
-          fontSize: 10,
-          textTransform: 'uppercase',
-          letterSpacing: '0.06em',
-        }}
-      >
-        <span>Step</span>
-        <span>Trigger price</span>
-        <span>Sell</span>
-      </div>
-      {steps.map((step) => (
-        <div
-          key={step.stepIndex}
-          style={{ ...gridStyle, fontSize: 12, fontVariantNumeric: 'tabular-nums' }}
-        >
-          <span style={{ color: 'var(--text-muted)' }}>{step.stepIndex + 1}</span>
-          <span style={{ color: 'var(--text)' }}>{formatCentsUsd(step.triggerPriceUsd)}</span>
-          <span style={{ color: 'var(--text)' }}>
-            {(step.sellFractionBps / BPS_PER_PCT).toFixed(0)}%
-          </span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// "What if the price fell to X?" — a slider that narrates the cumulative state.
-// ---------------------------------------------------------------------------
-
-const SCRUB_STEP_USD = 0.001
-const SCRUB_UNDERSHOOT_FRACTION = 0.15
-
-function WhatIfScrubber({
-  walkthrough,
-  initialPriceUsd,
-  scrubPriceUsd,
-  onScrub,
-}: {
-  walkthrough: ScheduleWalkthrough
-  initialPriceUsd: number | null
-  scrubPriceUsd: number | null
-  onScrub: (priceUsd: number) => void
-}) {
-  const maxPrice = walkthrough.basis.entryPriceUsd
-  const lowestTrigger = Math.min(
-    walkthrough.debtClearPriceUsd,
-    ...walkthrough.stepRows.map((row) => row.triggerPriceUsd),
-  )
-  const minPrice = Math.max(
-    SCRUB_STEP_USD,
-    lowestTrigger - (maxPrice - lowestTrigger) * SCRUB_UNDERSHOOT_FRACTION,
-  )
-
-  const clamp = (value: number) => Math.min(maxPrice, Math.max(minPrice, value))
-  const price = clamp(scrubPriceUsd ?? initialPriceUsd ?? maxPrice)
-  const state = scheduleStateAtPrice(walkthrough, price)
-
-  return (
-    <div
-      style={{
-        marginTop: 10,
-        border: '1px solid rgba(255,255,255,0.1)',
-        background: 'rgba(255,255,255,0.04)',
-        padding: '12px 14px',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'baseline',
-          marginBottom: 8,
-        }}
-      >
-        <span
-          style={{
-            fontSize: 11,
-            fontWeight: 600,
-            color: 'var(--text)',
-            textTransform: 'uppercase',
-            letterSpacing: '0.06em',
-          }}
-        >
-          What if the price fell to…
-        </span>
-        <span
-          style={{
-            fontSize: 14,
-            fontWeight: 600,
-            color: 'var(--yellow)',
-            fontVariantNumeric: 'tabular-nums',
-          }}
-        >
-          {formatCentsUsd(price)}
-        </span>
-      </div>
-
-      <input
-        type="range"
-        min={minPrice}
-        max={maxPrice}
-        step={SCRUB_STEP_USD}
-        value={price}
-        onChange={(e) => onScrub(clamp(Number(e.target.value)))}
-        aria-label="What-if price"
-        style={{ width: '100%', accentColor: 'var(--yellow)' }}
-      />
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          fontSize: 9,
-          color: 'var(--text-dim)',
-          marginTop: 2,
-        }}
-      >
-        <span>{formatCentsUsd(minPrice)}</span>
-        <span>entry {formatCentsUsd(maxPrice)}</span>
-      </div>
-
-      <p
-        style={{
-          margin: '8px 0 0',
-          fontSize: 12,
-          lineHeight: 1.55,
-          color: 'var(--text-muted)',
-        }}
-      >
-        <ScrubNarration walkthrough={walkthrough} price={price} state={state} />
-      </p>
-    </div>
-  )
-}
-
-function ScrubNarration({
-  walkthrough,
-  price,
-  state,
-}: {
-  walkthrough: ScheduleWalkthrough
-  price: number
-  state: ReturnType<typeof scheduleStateAtPrice>
-}) {
-  const atPrice = <strong style={{ color: 'var(--text)' }}>At {formatCentsUsd(price)}:</strong>
-  const nextEvent =
-    state.nextEventPriceUsd != null ? (
-      <>
-        {' '}Next:{' '}
-        {state.nextEventKind === 'debt-clear' ? (
-          <span style={{ color: DEBT_CLEAR_COLOR }}>
-            debt-clear exit at {formatCentsUsd(state.nextEventPriceUsd)} at the latest
-          </span>
-        ) : (
-          <>step at {formatCentsUsd(state.nextEventPriceUsd)}</>
-        )}
-        .
-      </>
-    ) : null
-  const backstopNote =
-    !state.debtClearFired && state.firedStepCount > 0 ? (
-      <>
-        {' '}The{' '}
-        <span style={{ color: DEBT_CLEAR_COLOR }}>
-          backstop is at most {formatCentsUsd(walkthrough.debtClearPriceUsd)}
-        </span>{' '}
-        and moves lower as steps repay.
-      </>
-    ) : null
-
-  if (state.inQuietZone) {
-    return (
-      <>
-        {atPrice} inside your quiet zone — nothing has fired, you still hold 100% of your tokens
-        and the loan is unchanged at ${state.loanRemainingUsd.toFixed(2)}.{nextEvent}
-      </>
-    )
-  }
-
-  const holdPct = (state.remainingFraction * PCT_PER_FRACTION).toFixed(0)
-  const approx = walkthrough.basis.tokensAreEstimated ? '≈' : ''
-  const tokens = `${approx}${state.tokensRemaining.toFixed(0)}`
-  const totalTokens = `${approx}${walkthrough.basis.positionTokens.toFixed(0)}`
-
-  if (state.debtClearFired) {
-    return (
-      <>
-        {atPrice} {state.firedStepCount} step{state.firedStepCount === 1 ? '' : 's'} plus the{' '}
-        <span style={{ color: DEBT_CLEAR_COLOR }}>debt-clear exit</span> have fired — the loan is
-        fully repaid. You'd hold <strong style={{ color: 'var(--text)' }}>{holdPct}%</strong> of
-        your tokens ({tokens} of {totalTokens}), owned outright.
-        {nextEvent}
-      </>
-    )
-  }
-
-  return (
-    <>
-      {atPrice} {state.firedStepCount} of {state.totalStepCount} steps have fired. You'd hold{' '}
-      <strong style={{ color: 'var(--text)' }}>{holdPct}%</strong> of your tokens ({tokens} of{' '}
-      {totalTokens}), loan down to{' '}
-      <strong style={{ color: 'var(--text)' }}>${state.loanRemainingUsd.toFixed(2)}</strong>.
-      {backstopNote}
-      {nextEvent}
-    </>
   )
 }

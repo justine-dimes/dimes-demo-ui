@@ -74,8 +74,10 @@ describe('QuoteDetails scheduled-deleveraging integration', () => {
     expect(screen.getByText('Standard (today)')).toBeInTheDocument()
     expect(screen.getByText('Scheduled (shadow preview)')).toBeInTheDocument()
     expect(screen.getByText('shadow — not yet executing')).toBeInTheDocument()
-    expect(screen.getByText('Position Remaining')).toBeInTheDocument()
-    expect(screen.getByRole('slider', { name: 'What-if price' })).toBeInTheDocument()
+    // Simplified panel: two parallel single-price cards, no ladder chart or scrubber.
+    expect(screen.getByText('27.5¢ exit')).toBeInTheDocument()
+    expect(screen.queryByText('Position Remaining')).not.toBeInTheDocument()
+    expect(screen.queryByRole('slider', { name: 'What-if price' })).not.toBeInTheDocument()
     // The engine is still the real manager — its liquidation price stays a
     // first-class stat, with no superseded chip and no strike-through.
     expect(screen.getByText('Liquidation Price')).toBeInTheDocument()
