@@ -14,7 +14,6 @@ import {
   formatCentsUsd,
   parseScheduleBasis,
   scheduleStateAtPrice,
-  simulateScheduleEvents,
 } from '../utils/deleverageSchedule'
 import { StatRow } from './StatRow'
 import { StatGroup } from './CardViewParts'
@@ -340,37 +339,10 @@ function WalkthroughTable({
 }) {
   if (!walkthrough) return <SimpleStepTable steps={schedule.steps} />
 
-  const simulatedEvents = simulateScheduleEvents(walkthrough)
-  const simulatedExit = simulatedEvents.find((event) => event.kind === 'debt-clear')
-  const firedStepIndexes = new Set(
-    simulatedEvents.filter((e) => e.kind === 'step').map((e) => e.stepIndex),
-  )
-  // The table shows the PHYSICAL straight-decline path: the steps that fire,
-  // then the exit at the moved-down price where it actually clears. Printed
-  // steps below that are unreachable on a straight fall (the exit liquidates
-  // first), so they're summarised as contingency lines rather than advertised.
-  const firedRows = walkthrough.stepRows.filter((row) => firedStepIndexes.has(row.stepIndex))
-  const contingencyRows = walkthrough.stepRows.filter((row) => !firedStepIndexes.has(row.stepIndex))
-  const basis = walkthrough.basis
-  const exitRow =
-    simulatedExit != null
-      ? {
-          priceUsd: simulatedExit.priceUsd,
-          dropFromEntryFraction: 1 - simulatedExit.priceUsd / basis.entryPriceUsd,
-          remainingFractionAfter: simulatedExit.remainingFractionAfter,
-          proceedsUsd: simulatedExit.tokensSold * simulatedExit.priceUsd,
-          loanAfterUsd: simulatedExit.loanAfterUsd,
-          sellFractionOfCurrent:
-            simulatedExit.tokensSold + simulatedExit.remainingFractionAfter * basis.positionTokens >
-            0
-              ? simulatedExit.tokensSold /
-                (simulatedExit.tokensSold +
-                  simulatedExit.remainingFractionAfter * basis.positionTokens)
-              : 0,
-          leverageAfter:
-            simulatedExit.loanAfterUsd <= 0 && simulatedExit.remainingFractionAfter > 0 ? 1 : null,
-        }
-      : null
+  // The printed schedule is fixed: show every printed step, then the static
+  // debt-clear row (the at-entry worst-case exit, computed after the steps).
+  const stepRows = walkthrough.stepRows
+  const debtClear = walkthrough.debtClear
 
   const rowStyle = (key: ScheduleHoverKey) =>
     ({
@@ -412,7 +384,7 @@ function WalkthroughTable({
         <span>Loan after</span>
       </div>
 
-      {firedRows.map((row) => (
+      {stepRows.map((row) => (
         <div
           key={row.stepIndex}
           style={{ ...rowStyle(row.stepIndex), ...cellFont }}
@@ -454,48 +426,29 @@ function WalkthroughTable({
       >
         <span style={{ color: DEBT_CLEAR_COLOR }}>⏻</span>
         <span style={{ color: DEBT_CLEAR_COLOR }}>
-          {exitRow != null ? formatCentsUsd(exitRow.priceUsd) : '—'}
+          {formatCentsUsd(debtClear.triggerPriceUsd)}
         </span>
         <span style={{ color: DEBT_CLEAR_COLOR }}>
-          {exitRow != null ? formatLeverage(exitRow.leverageAfter) : '—'}
+          {formatLeverage(debtClear.effectiveLeverageAfter)}
         </span>
         <span style={{ color: 'var(--text-dim)' }}>—</span>
         <span style={{ color: 'var(--text-muted)' }}>
-          {exitRow != null
-            ? `−${(exitRow.dropFromEntryFraction * PCT_PER_FRACTION).toFixed(0)}%`
-            : '—'}
+          −{(debtClear.dropFromEntryFraction * PCT_PER_FRACTION).toFixed(0)}%
         </span>
         <span style={{ color: DEBT_CLEAR_COLOR }}>
-          {exitRow != null ? `${(exitRow.sellFractionOfCurrent * PCT_PER_FRACTION).toFixed(0)}%` : '—'}
+          {(debtClear.sellFractionOfCurrentBps / BPS_PER_PCT).toFixed(0)}%
         </span>
         <span style={{ color: 'var(--text-muted)' }}>
-          {exitRow != null ? `${(exitRow.remainingFractionAfter * PCT_PER_FRACTION).toFixed(0)}%` : '—'}
+          {(debtClear.remainingFractionAfter * PCT_PER_FRACTION).toFixed(0)}%
         </span>
-        <span style={{ color: 'var(--text-muted)' }}>
-          ${exitRow != null ? exitRow.proceedsUsd.toFixed(2) : '0.00'}
-        </span>
-        <span style={{ color: DEBT_CLEAR_COLOR }}>
-          ${exitRow != null ? exitRow.loanAfterUsd.toFixed(2) : '0.00'}
-        </span>
+        <span style={{ color: 'var(--text-muted)' }}>${debtClear.proceedsUsd.toFixed(2)}</span>
+        <span style={{ color: DEBT_CLEAR_COLOR }}>$0.00</span>
       </div>
       <div style={{ padding: '2px 8px 0', fontSize: 9, color: DEBT_CLEAR_COLOR, opacity: 0.8 }}>
         Debt-clear exit (at most {formatCentsUsd(walkthrough.debtClearPriceUsd)} — falls as steps
-        repay) — sells just enough to repay the loan in full the moment the live exit line is
-        touched. The printed price is the at-entry worst case.
-        {simulatedExit != null && (
-          <> On a straight decline it fires at ≈{formatCentsUsd(simulatedExit.priceUsd)}.</>
-        )}
+        repay) — sells just enough to repay the loan in full. The printed price is the at-entry
+        worst case.
       </div>
-      {contingencyRows.length > 0 && (
-        <div style={{ padding: '2px 8px 0', fontSize: 9, color: 'var(--text-dim)' }}>
-          + {contingencyRows.length} further pre-committed line
-          {contingencyRows.length === 1 ? '' : 's'} from{' '}
-          {formatCentsUsd(contingencyRows[0].triggerPriceUsd)} to{' '}
-          {formatCentsUsd(contingencyRows[contingencyRows.length - 1].triggerPriceUsd)}, below where
-          the exit fires — reached only if the price dips and partly recovers repeatedly; skipped on
-          a straight fall.
-        </div>
-      )}
 
       {schedule.timeTrims?.map((trim) => (
         <div
@@ -703,17 +656,14 @@ function ScrubNarration({
         .
       </>
     ) : null
-  const exitLineNote =
-    !state.debtClearFired && state.currentDebtClearLineUsd != null ? (
+  const backstopNote =
+    !state.debtClearFired && state.firedStepCount > 0 ? (
       <>
-        {' '}The live{' '}
+        {' '}The{' '}
         <span style={{ color: DEBT_CLEAR_COLOR }}>
-          exit line is now ≈{formatCentsUsd(state.currentDebtClearLineUsd)}
-        </span>
-        {state.firedStepCount > 0 && (
-          <> (down from the printed {formatCentsUsd(walkthrough.debtClearPriceUsd)})</>
-        )}
-        .
+          backstop is at most {formatCentsUsd(walkthrough.debtClearPriceUsd)}
+        </span>{' '}
+        and moves lower as steps repay.
       </>
     ) : null
 
@@ -749,7 +699,7 @@ function ScrubNarration({
       <strong style={{ color: 'var(--text)' }}>{holdPct}%</strong> of your tokens ({tokens} of{' '}
       {totalTokens}), loan down to{' '}
       <strong style={{ color: 'var(--text)' }}>${state.loanRemainingUsd.toFixed(2)}</strong>.
-      {exitLineNote}
+      {backstopNote}
       {nextEvent}
     </>
   )

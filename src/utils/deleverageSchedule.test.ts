@@ -5,8 +5,6 @@ import {
   formatCentsUsd,
   parseScheduleBasis,
   scheduleStateAtPrice,
-  simulateScheduleEvents,
-  solveDebtClearLineUsd,
 } from './deleverageSchedule'
 
 // Same real capture as scheduled-deleveraging.types.test.ts (tennis market,
@@ -119,121 +117,55 @@ describe('buildScheduleWalkthrough', () => {
   })
 })
 
-describe('solveDebtClearLineUsd', () => {
-  it('picks the haircut band the line itself lands in', () => {
-    // 250 / (980.392 × (1 − 0.08)) — the 8% band, because the line sits in 20–50¢.
-    expect(solveDebtClearLineUsd(250, 980.392)).toBeCloseTo(0.2772, 4)
-    // High-leverage case lands above 50¢ → 3% band.
-    expect(solveDebtClearLineUsd(300, 526.3)).toBeCloseTo(0.58765, 4)
-  })
-
-  it('returns null with no loan or no tokens', () => {
-    expect(solveDebtClearLineUsd(0, 100)).toBeNull()
-    expect(solveDebtClearLineUsd(10, 0)).toBeNull()
-  })
-})
-
-describe('simulateScheduleEvents', () => {
-  it('fires steps until the sweep meets the moving exit line, then clears and stops', () => {
-    const events = simulateScheduleEvents(walkthrough())
-    const stepEvents = events.filter((e) => e.kind === 'step')
-    const clearEvents = events.filter((e) => e.kind === 'debt-clear')
-    expect(stepEvents).toHaveLength(5)
-    expect(clearEvents).toHaveLength(1)
-    expect(clearEvents[0].priceUsd).toBeCloseTo(0.2291, 4)
-    expect(clearEvents[0].remainingFractionAfter).toBeCloseTo(0.0468, 3)
-    expect(clearEvents[0].loanAfterUsd).toBe(0)
-    expect(events[events.length - 1]).toBe(clearEvents[0])
-  })
-
-  it('clears almost immediately when the initial line sits just under the first step', () => {
-    const highLevSchedule: DeleverageScheduleView = {
-      entryBufferFloorPriceUsd: '0.7220',
-      steps: [
-        { stepIndex: 0, triggerPriceUsd: '0.5900', sellFractionBps: 1300 },
-        { stepIndex: 1, triggerPriceUsd: '0.5640', sellFractionBps: 1300 },
-        { stepIndex: 2, triggerPriceUsd: '0.5380', sellFractionBps: 1300 },
-      ],
-      debtClearPriceUsd: '0.5877',
-      safetyDepositRequiredUsd: '25.00',
-      safetyDepositCollectedUsd: '25.00',
-    }
-    const basis = parseScheduleBasis({
-      entryPriceUsd: '0.76',
-      notionalUsd: '400.00',
-      collateralUsd: '100.00',
-      positionTokenUnits: null,
-    })!
-    const events = simulateScheduleEvents(buildScheduleWalkthrough(highLevSchedule, basis))
-    expect(events.map((e) => e.kind)).toEqual(['step', 'debt-clear'])
-    expect(events[1].priceUsd).toBeCloseTo(0.5845, 3)
-    expect(events[1].remainingFractionAfter).toBeCloseTo(0.026, 2)
-  })
-
-  it('stops all forced selling once the printed steps repay the loan in full', () => {
-    const lowLoanSchedule: DeleverageScheduleView = {
-      entryBufferFloorPriceUsd: '0.4750',
-      steps: [
-        { stepIndex: 0, triggerPriceUsd: '0.4500', sellFractionBps: 1500 },
-        { stepIndex: 1, triggerPriceUsd: '0.4200', sellFractionBps: 1500 },
-      ],
-      debtClearPriceUsd: '0.0543',
-      safetyDepositRequiredUsd: '15.00',
-      safetyDepositCollectedUsd: '15.00',
-    }
-    const basis = parseScheduleBasis({
-      entryPriceUsd: '0.50',
-      notionalUsd: '100.00',
-      collateralUsd: '90.00',
-      positionTokenUnits: null,
-    })!
-    const events = simulateScheduleEvents(buildScheduleWalkthrough(lowLoanSchedule, basis))
-    expect(events.map((e) => e.kind)).toEqual(['step'])
-    expect(events[0].loanAfterUsd).toBe(0)
-    expect(events[0].lineAfterUsd).toBeNull()
-  })
-})
-
-describe('scheduleStateAtPrice', () => {
-  it('reports the quiet zone above the buffer floor, with the initial live line', () => {
+describe('scheduleStateAtPrice (static printed schedule)', () => {
+  it('reports the quiet zone above the buffer floor, before any step fires', () => {
     const state = scheduleStateAtPrice(walkthrough(), 0.5)
     expect(state.inQuietZone).toBe(true)
     expect(state.firedStepCount).toBe(0)
+    expect(state.debtClearFired).toBe(false)
     expect(state.remainingFraction).toBe(1)
     expect(state.loanRemainingUsd).toBe(250)
-    expect(state.currentDebtClearLineUsd).toBeCloseTo(0.2772, 4)
     expect(state.nextEventKind).toBe('step')
     expect(state.nextEventPriceUsd).toBeCloseTo(0.36, 10)
   })
 
-  it('accumulates fired steps and lowers the live line at a mid-ladder price', () => {
+  it('fires every printed step at or above the probed price, in order', () => {
     const state = scheduleStateAtPrice(walkthrough(), 0.33)
     expect(state.firedStepCount).toBe(2)
     expect(state.remainingFraction).toBeCloseTo(0.765, 3)
     expect(state.loanRemainingUsd).toBeCloseTo(169.75, 2)
     expect(state.debtClearFired).toBe(false)
-    expect(state.currentDebtClearLineUsd).toBeCloseTo(0.246, 3)
     expect(state.nextEventKind).toBe('step')
     expect(state.nextEventPriceUsd).toBeCloseTo(0.3016, 10)
   })
 
-  it('does NOT fire the exit at the printed at-entry price once steps have moved the line', () => {
+  it('fires the debt-clear exit at or below the printed at-entry price', () => {
+    // debtClearPriceUsd is 27.5¢; at 27.3¢ the exit has fired and the loan is
+    // repaid in full, regardless of how many printed steps preceded it.
     const state = scheduleStateAtPrice(walkthrough(), 0.273)
-    expect(state.firedStepCount).toBe(3)
-    expect(state.debtClearFired).toBe(false)
-    expect(state.loanRemainingUsd).toBeCloseTo(147.79, 2)
-    expect(state.currentDebtClearLineUsd).toBeCloseTo(0.2372, 3)
-    expect(state.nextEventKind).toBe('step')
-    expect(state.nextEventPriceUsd).toBeCloseTo(0.2724, 10)
-  })
-
-  it('fires the exit where the sweep meets the moving line and reports the ride-free tail', () => {
-    const state = scheduleStateAtPrice(walkthrough(), 0.12)
-    expect(state.firedStepCount).toBe(5)
     expect(state.debtClearFired).toBe(true)
     expect(state.loanRemainingUsd).toBe(0)
-    expect(state.remainingFraction).toBeCloseTo(0.0468, 3)
-    expect(state.currentDebtClearLineUsd).toBeNull()
+    expect(state.remainingFraction).toBeCloseTo(0.0972, 3)
+    expect(state.nextEventKind).toBeNull()
+    expect(state.nextEventPriceUsd).toBeNull()
+  })
+
+  it('does NOT fire the debt-clear above its printed price, and names it as next', () => {
+    // 28¢ sits just above the printed 27.5¢ debt-clear, which is itself above
+    // the next step (27.24¢) — so the debt-clear is the next event on the way
+    // down, priced at the printed at-entry bound.
+    const state = scheduleStateAtPrice(walkthrough(), 0.28)
+    expect(state.debtClearFired).toBe(false)
+    expect(state.firedStepCount).toBe(3)
+    expect(state.nextEventKind).toBe('debt-clear')
+    expect(state.nextEventPriceUsd).toBeCloseTo(0.275, 10)
+  })
+
+  it('reports the ride-free tail once the debt-clear has fired', () => {
+    const state = scheduleStateAtPrice(walkthrough(), 0.12)
+    expect(state.debtClearFired).toBe(true)
+    expect(state.loanRemainingUsd).toBe(0)
+    expect(state.remainingFraction).toBeCloseTo(0.0972, 3)
     expect(state.nextEventKind).toBeNull()
     expect(state.nextEventPriceUsd).toBeNull()
   })

@@ -1,6 +1,6 @@
 import type { DeleverageScheduleView } from '../api/scheduled-deleveraging.types'
 import type { ScheduleWalkthrough } from '../utils/deleverageSchedule'
-import { formatCentsUsd, simulateScheduleEvents } from '../utils/deleverageSchedule'
+import { formatCentsUsd } from '../utils/deleverageSchedule'
 import { useMeasuredWidth } from './useMeasuredWidth'
 
 export type ScheduleHoverKey = number | 'debt-clear' | null
@@ -44,25 +44,15 @@ function priceDomain(
   }
 }
 
+// Static per-step staircase: start at 100%, drop by each printed step's sell
+// fraction at its trigger price, in printed order, then the debt-clear drop.
+// The printed schedule is fixed and known at quote time — no simulation.
 function buildStaircaseDrops(
   schedule: DeleverageScheduleView,
   walkthrough: ScheduleWalkthrough | null,
 ): StaircaseDrop[] {
-  if (walkthrough) {
-    let remainingBefore = 1
-    return simulateScheduleEvents(walkthrough).map((event) => {
-      const drop: StaircaseDrop = {
-        key: event.kind === 'debt-clear' ? 'debt-clear' : (event.stepIndex ?? 0),
-        priceUsd: event.priceUsd,
-        remainingBefore,
-        remainingAfter: event.remainingFractionAfter,
-      }
-      remainingBefore = event.remainingFractionAfter
-      return drop
-    })
-  }
   let remaining = 1
-  return schedule.steps.map((step) => {
+  const drops: StaircaseDrop[] = schedule.steps.map((step) => {
     const remainingBefore = remaining
     remaining *= 1 - step.sellFractionBps / BPS_PER_UNIT
     return {
@@ -72,6 +62,15 @@ function buildStaircaseDrops(
       remainingAfter: remaining,
     }
   })
+  if (walkthrough) {
+    drops.push({
+      key: 'debt-clear',
+      priceUsd: walkthrough.debtClear.triggerPriceUsd,
+      remainingBefore: remaining,
+      remainingAfter: walkthrough.debtClear.remainingFractionAfter,
+    })
+  }
+  return drops
 }
 
 export function DeleverageScheduleCharts({

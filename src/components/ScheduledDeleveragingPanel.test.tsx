@@ -106,21 +106,24 @@ describe('ScheduledDeleveragingPanel', () => {
     expect(summary.textContent).toContain('exit line falls as steps fire')
   })
 
-  it('renders the fired steps, the moved-down exit, the contingency note, and time-trims', () => {
+  it('renders every printed step, the static debt-clear row, and time-trims', () => {
     renderPanel()
     expect(screen.getByText('Loan after')).toBeInTheDocument()
-    // First step (fires): proceeds $49.55, loan remaining $200.45, gap-to-step-2 2.9¢.
+    // First step: proceeds $49.55, loan remaining $200.45, gap-to-step-2 2.9¢.
     expect(screen.getByText('$49.55')).toBeInTheDocument()
     expect(screen.getByText('$200.45')).toBeInTheDocument()
     expect(screen.getAllByText('2.9¢').length).toBeGreaterThan(0)
-    // The footnote keeps the at-entry worst case; the printed 27.5¢ falls as steps repay.
+    // A deep printed step is still shown (no fired/contingency filtering).
+    expect(screen.getByText('12.6¢')).toBeInTheDocument()
+    // The debt-clear row shows the static at-entry values: 27.5¢, loan fully repaid.
+    expect(screen.getAllByText('27.5¢').length).toBeGreaterThan(0)
+    // The footnote keeps the at-entry worst case; the printed 27.5¢ is the bound.
     expect(
       screen.getByText(/Debt-clear exit \(at most 27\.5¢ — falls as steps repay\)/),
     ).toBeInTheDocument()
-    // Steps below where the exit fires on a straight decline are summarised, not advertised.
-    expect(
-      screen.getByText(/further pre-committed line.*below where\s+the exit fires/s),
-    ).toBeInTheDocument()
+    // No straight-decline simulation clause and no contingency summary anymore.
+    expect(screen.queryByText(/On a straight decline/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/further pre-committed line/)).not.toBeInTheDocument()
     expect(screen.getByText(/At 50% of game time, regardless of price/)).toBeInTheDocument()
     expect(screen.getByText('sell 20%')).toBeInTheDocument()
   })
@@ -140,10 +143,9 @@ describe('ScheduledDeleveragingPanel', () => {
     expect(midLadder.textContent).toContain('2 of 9 steps have fired')
     expect(midLadder.textContent).toContain('76%')
     expect(midLadder.textContent).toContain('$169.75')
-    // Fired steps have repaid part of the loan, so the live exit line has
-    // moved under the printed at-entry value.
-    expect(midLadder.textContent).toContain('exit line is now ≈24.6¢')
-    expect(midLadder.textContent).toContain('down from the printed 27.5¢')
+    // Steps have fired, so the backstop is presented as a bound, not a live price.
+    expect(midLadder.textContent).toContain('backstop is at most 27.5¢')
+    expect(midLadder.textContent).toContain('moves lower as steps repay')
     expect(midLadder.textContent).toContain('step at 30.2¢')
 
     fireEvent.change(slider, { target: { value: '0.5' } })
