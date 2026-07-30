@@ -319,12 +319,7 @@ function PlanSummary({
 // The full step-by-step plan, with cumulative columns and explicit cadence.
 // ---------------------------------------------------------------------------
 
-const TABLE_GRID_COLUMNS = '22px 52px 42px 44px 44px 40px 44px 54px 58px'
-
-/** Cost-basis leverage → "3.7x"; null (equity exhausted) → "—". */
-function formatLeverage(leverage: number | null): string {
-  return leverage != null ? `${leverage.toFixed(1)}x` : '—'
-}
+const TABLE_GRID_COLUMNS = '22px 52px 44px 44px 40px 44px 54px 58px'
 
 function WalkthroughTable({
   schedule,
@@ -375,7 +370,6 @@ function WalkthroughTable({
       >
         <span>#</span>
         <span>Trigger</span>
-        <span>Lev</span>
         <span>Gap</span>
         <span>Drop</span>
         <span>Sell</span>
@@ -393,9 +387,6 @@ function WalkthroughTable({
         >
           <span style={{ color: 'var(--text-muted)' }}>{row.stepIndex + 1}</span>
           <span style={{ color: 'var(--text)' }}>{formatCentsUsd(row.triggerPriceUsd)}</span>
-          <span style={{ color: 'var(--text-muted)' }}>
-            {formatLeverage(row.effectiveLeverageAfter)}
-          </span>
           <span style={{ color: 'var(--text-dim)' }}>
             {row.spacingUsd != null ? formatCentsUsd(row.spacingUsd) : '—'}
           </span>
@@ -427,9 +418,6 @@ function WalkthroughTable({
         <span style={{ color: DEBT_CLEAR_COLOR }}>⏻</span>
         <span style={{ color: DEBT_CLEAR_COLOR }}>
           {formatCentsUsd(debtClear.triggerPriceUsd)}
-        </span>
-        <span style={{ color: DEBT_CLEAR_COLOR }}>
-          {formatLeverage(debtClear.effectiveLeverageAfter)}
         </span>
         <span style={{ color: 'var(--text-dim)' }}>—</span>
         <span style={{ color: 'var(--text-muted)' }}>

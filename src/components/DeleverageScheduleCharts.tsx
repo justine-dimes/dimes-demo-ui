@@ -44,33 +44,58 @@ function priceDomain(
   }
 }
 
-// Static per-step staircase: start at 100%, drop by each printed step's sell
-// fraction at its trigger price, in printed order, then the debt-clear drop.
-// The printed schedule is fixed and known at quote time — no simulation.
+// An event is either a printed step (fraction sold of the surviving position,
+// so it chains multiplicatively) or the debt-clear exit (its remaining-after is
+// precomputed off the original position in the walkthrough).
+interface StaircaseEvent {
+  key: number | 'debt-clear'
+  priceUsd: number
+  remainingMultiplier: number | null
+  absoluteRemainingAfter: number | null
+}
+
+// Static per-step staircase: start at 100%, drop at each event's trigger price.
+// Events are ordered by price DESCENDING (highest price = leftmost, since price
+// falls left → right) before chaining the remaining fraction, so the debt-clear
+// renders at its true price position rather than always last. For coherent
+// (post-gate) schedules the debt-clear is the lowest price and stays at the
+// bottom-right; this just makes the ordering robust. The printed schedule is
+// fixed and known at quote time — no simulation.
 function buildStaircaseDrops(
   schedule: DeleverageScheduleView,
   walkthrough: ScheduleWalkthrough | null,
 ): StaircaseDrop[] {
+  const events: StaircaseEvent[] = schedule.steps.map((step) => ({
+    key: step.stepIndex,
+    priceUsd: parseFloat(step.triggerPriceUsd),
+    remainingMultiplier: 1 - step.sellFractionBps / BPS_PER_UNIT,
+    absoluteRemainingAfter: null,
+  }))
+  if (walkthrough) {
+    events.push({
+      key: 'debt-clear',
+      priceUsd: walkthrough.debtClear.triggerPriceUsd,
+      remainingMultiplier: null,
+      absoluteRemainingAfter: walkthrough.debtClear.remainingFractionAfter,
+    })
+  }
+
+  events.sort((a, b) => b.priceUsd - a.priceUsd)
+
   let remaining = 1
-  const drops: StaircaseDrop[] = schedule.steps.map((step) => {
+  return events.map((event) => {
     const remainingBefore = remaining
-    remaining *= 1 - step.sellFractionBps / BPS_PER_UNIT
+    remaining =
+      event.absoluteRemainingAfter != null
+        ? event.absoluteRemainingAfter
+        : remaining * event.remainingMultiplier!
     return {
-      key: step.stepIndex,
-      priceUsd: parseFloat(step.triggerPriceUsd),
+      key: event.key,
+      priceUsd: event.priceUsd,
       remainingBefore,
       remainingAfter: remaining,
     }
   })
-  if (walkthrough) {
-    drops.push({
-      key: 'debt-clear',
-      priceUsd: walkthrough.debtClear.triggerPriceUsd,
-      remainingBefore: remaining,
-      remainingAfter: walkthrough.debtClear.remainingFractionAfter,
-    })
-  }
-  return drops
 }
 
 export function DeleverageScheduleCharts({

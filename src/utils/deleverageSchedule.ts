@@ -51,22 +51,6 @@ export interface ScheduleStepRow {
   proceedsUsd: number;
   remainingFractionAfter: number;
   loanAfterUsd: number;
-  effectiveLeverageAfter: number | null;
-}
-
-// Cost-basis leverage = remaining position valued at ENTRY price / remaining
-// equity. Entry-priced (not marked to the trigger) so it reflects the
-// deleveraging action itself — selling down repays loan and lowers it toward
-// 1x — rather than the market drop (which erodes equity and would raise a
-// marked leverage). null once realized cost-basis losses exhaust equity.
-function costBasisLeverage(
-  notionalUsd: number,
-  remainingFraction: number,
-  loanRemainingUsd: number,
-): number | null {
-  const costValueUsd = notionalUsd * remainingFraction;
-  const equityAtCostUsd = costValueUsd - loanRemainingUsd;
-  return equityAtCostUsd > 0 ? costValueUsd / equityAtCostUsd : null;
 }
 
 export interface DebtClearRow {
@@ -76,7 +60,6 @@ export interface DebtClearRow {
   tokensSold: number;
   proceedsUsd: number;
   remainingFractionAfter: number;
-  effectiveLeverageAfter: number | null;
 }
 
 export interface ScheduleWalkthrough {
@@ -160,7 +143,6 @@ export function buildScheduleWalkthrough(
       proceedsUsd,
       remainingFractionAfter: remainingFraction,
       loanAfterUsd: loanUsd,
-      effectiveLeverageAfter: costBasisLeverage(basis.notionalUsd, remainingFraction, loanUsd),
     });
     previousTriggerUsd = triggerPriceUsd;
   }
@@ -172,7 +154,6 @@ export function buildScheduleWalkthrough(
     basis.positionTokens > 0
       ? (tokensBeforeDebtClear - debtClearTokensSold) / basis.positionTokens
       : 0;
-  const loanAfterDebtClear = Math.max(0, loanUsd - debtClearTokensSold * debtClearPriceUsd);
   const debtClear: DebtClearRow = {
     triggerPriceUsd: debtClearPriceUsd,
     dropFromEntryFraction: 1 - debtClearPriceUsd / basis.entryPriceUsd,
@@ -183,11 +164,6 @@ export function buildScheduleWalkthrough(
     tokensSold: debtClearTokensSold,
     proceedsUsd: debtClearTokensSold * debtClearPriceUsd,
     remainingFractionAfter: debtClearRemainingFraction,
-    effectiveLeverageAfter: costBasisLeverage(
-      basis.notionalUsd,
-      debtClearRemainingFraction,
-      loanAfterDebtClear,
-    ),
   };
 
   return { basis, quietZoneFloorUsd, debtClearPriceUsd, safetyDepositUsd, stepRows, debtClear };

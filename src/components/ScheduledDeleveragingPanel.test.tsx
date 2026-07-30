@@ -113,8 +113,10 @@ describe('ScheduledDeleveragingPanel', () => {
     expect(screen.getByText('$49.55')).toBeInTheDocument()
     expect(screen.getByText('$200.45')).toBeInTheDocument()
     expect(screen.getAllByText('2.9¢').length).toBeGreaterThan(0)
-    // A deep printed step is still shown (no fired/contingency filtering).
-    expect(screen.getByText('12.6¢')).toBeInTheDocument()
+    // A deep printed step is still shown (no fired/contingency filtering). In
+    // this pre-gate fixture the debt-clear (27.5¢) sits above the deepest step
+    // (12.6¢), so 12.6¢ is the chart's lowest-price x-axis label too.
+    expect(screen.getAllByText('12.6¢').length).toBeGreaterThan(0)
     // The debt-clear row shows the static at-entry values: 27.5¢, loan fully repaid.
     expect(screen.getAllByText('27.5¢').length).toBeGreaterThan(0)
     // The footnote keeps the at-entry worst case; the printed 27.5¢ is the bound.
@@ -126,6 +128,19 @@ describe('ScheduledDeleveragingPanel', () => {
     expect(screen.queryByText(/further pre-committed line/)).not.toBeInTheDocument()
     expect(screen.getByText(/At 50% of game time, regardless of price/)).toBeInTheDocument()
     expect(screen.getByText('sell 20%')).toBeInTheDocument()
+  })
+
+  it('has no leverage column in the step table', () => {
+    renderPanel()
+    expect(screen.getByText('Loan after')).toBeInTheDocument()
+    expect(screen.queryByText('Lev')).not.toBeInTheDocument()
+  })
+
+  it('reports the true maximum single-step sell fraction in the summary', () => {
+    renderPanel()
+    // Max sellFractionBps across steps is 1404 (step 0) = 14%.
+    const summary = paragraphMatching(/no step sells more than/)
+    expect(summary.textContent).toContain('no step sells more than 14% of what you still hold')
   })
 
   it('renders the position-remaining chart and the refundable deposit rows', () => {

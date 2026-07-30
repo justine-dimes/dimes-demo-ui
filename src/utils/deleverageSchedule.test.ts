@@ -89,25 +89,6 @@ describe('buildScheduleWalkthrough', () => {
     expect(rows[8].loanAfterUsd).toBeCloseTo(109.67, 2)
   })
 
-  it('reports cost-basis leverage: falls on the first step, stays >=1x, 1x at debt-clear', () => {
-    const { basis, stepRows, debtClear } = walkthrough()
-    const entryLeverage = basis.notionalUsd / basis.collateralUsd
-    // 2x position: notional 500 / collateral 250 = 2.0x at entry.
-    expect(entryLeverage).toBeCloseTo(2.0, 10)
-    // First step (sold ~14% at 36¢, loan 250 → 200.45): 429.8 / (429.8 − 200.45).
-    expect(stepRows[0].effectiveLeverageAfter).toBeCloseTo(1.874, 3)
-    expect(stepRows[0].effectiveLeverageAfter!).toBeLessThan(entryLeverage)
-    // A levered long is always >= 1x while any loan remains (not monotone deep:
-    // realized losses on deep sales can nudge it back up before debt-clear).
-    for (const row of stepRows) {
-      if (row.effectiveLeverageAfter != null) {
-        expect(row.effectiveLeverageAfter).toBeGreaterThanOrEqual(1)
-      }
-    }
-    // Debt-clear repays the loan in full → unlevered, own the tokens outright.
-    expect(debtClear.effectiveLeverageAfter).toBeCloseTo(1.0, 3)
-  })
-
   it('sizes the debt-clear exit to repay exactly the loan left after all printed steps', () => {
     const { debtClear } = walkthrough()
     expect(debtClear.triggerPriceUsd).toBeCloseTo(0.275, 10)
