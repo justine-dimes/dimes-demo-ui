@@ -4,7 +4,7 @@ import type {
 } from '../api/scheduled-deleveraging.types'
 import type { PositionUnwindList } from '../api/types'
 import type { ScheduleBasisInput } from '../utils/deleverageSchedule'
-import { formatCentsUsd } from '../utils/deleverageSchedule'
+import { computeScheduleLeverageSteps, formatCentsUsd, formatLeverageBps } from '../utils/deleverageSchedule'
 import { StatRow } from './StatRow'
 import { StatGroup } from './CardViewParts'
 import { DEBT_CLEAR_COLOR, ShadowDeleverageTimeline } from './ShadowDeleverageTimeline'
@@ -39,6 +39,8 @@ export function ScheduledDeleveragingPanel({
       {showComparison && liquidationPriceUsd != null && (
         <EssentialsLine schedule={schedule} basis={basis} />
       )}
+
+      <ScheduleStepsLadder schedule={schedule} basis={basis} />
 
       {shadowDeleverage != null && (
         <ShadowDeleverageTimeline shadow={shadowDeleverage} unwinds={unwinds} />
@@ -191,5 +193,123 @@ function EssentialsLine({
       </strong>
       .
     </p>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// The schedule's steps as a book-leverage ladder: the price each step fires at
+// and the leverage it brings the position down to. Book leverage =
+// (loan + collateral) / collateral, so it only steps DOWN as sales repay the
+// loan — monotonic, no market-price up-and-down — landing at 1x when the
+// debt-clear repays the loan in full.
+// ---------------------------------------------------------------------------
+
+const ONE_X_BPS = 10000
+
+function ScheduleStepsLadder({
+  schedule,
+  basis,
+}: {
+  schedule: DeleverageScheduleView
+  basis: ScheduleBasisInput
+}) {
+  const steps = computeScheduleLeverageSteps(schedule, basis)
+  if (steps.length === 0) {
+    return null
+  }
+
+  const entryLeverageBps = Math.round((Number(basis.notionalUsd) / Number(basis.collateralUsd)) * ONE_X_BPS)
+  const maxBps = Math.max(entryLeverageBps, ...steps.map((step) => step.bookLeverageBps))
+  const barWidthPct = (bps: number): number => {
+    const span = maxBps - ONE_X_BPS
+    return span <= 0 ? 100 : Math.round(((bps - ONE_X_BPS) / span) * 100)
+  }
+
+  const sellableRungCount = schedule.steps.filter((step) => step.sellFractionBps > 0).length
+  const shownRungCount = steps.filter((step) => !step.isDebtClear).length
+  const skippedRungCount = sellableRungCount - shownRungCount
+
+  return (
+    <div style={{ margin: '4px 0 12px' }}>
+      <div
+        style={{
+          fontSize: 9,
+          fontWeight: 600,
+          letterSpacing: '0.12em',
+          textTransform: 'uppercase',
+          color: 'var(--text-dim)',
+          marginBottom: 6,
+        }}
+      >
+        Deleverage ladder — leverage steps down as it sells
+      </div>
+      <LadderRow
+        label={`Entry ${formatCentsUsd(basis.entryPriceUsd)}`}
+        leverageBps={entryLeverageBps}
+        widthPct={barWidthPct(entryLeverageBps)}
+        isEntry
+      />
+      {steps.map((step, index) => (
+        <LadderRow
+          key={`${step.triggerPriceUsd}-${index}`}
+          label={
+            step.isDebtClear
+              ? `Debt-clear ${formatCentsUsd(step.triggerPriceUsd)}`
+              : formatCentsUsd(step.triggerPriceUsd)
+          }
+          leverageBps={step.bookLeverageBps}
+          widthPct={barWidthPct(step.bookLeverageBps)}
+          isDebtClear={step.isDebtClear}
+        />
+      ))}
+      <div style={{ marginTop: 6, fontSize: 10, lineHeight: 1.5, color: 'var(--text-dim)' }}>
+        Leverage falls only as the loan is repaid; the debt-clear repays whatever remains.
+        {skippedRungCount > 0 &&
+          ` The ${skippedRungCount} lower rung${skippedRungCount === 1 ? '' : 's'} never fire here — the debt-clear clears the loan first.`}
+      </div>
+    </div>
+  )
+}
+
+function LadderRow({
+  label,
+  leverageBps,
+  widthPct,
+  isEntry,
+  isDebtClear,
+}: {
+  label: string
+  leverageBps: number
+  widthPct: number
+  isEntry?: boolean
+  isDebtClear?: boolean
+}) {
+  const valueColor = isDebtClear ? DEBT_CLEAR_COLOR : 'var(--text)'
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        padding: '2px 0',
+        fontSize: 11,
+        fontVariantNumeric: 'tabular-nums',
+      }}
+    >
+      <span style={{ width: 96, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{label}</span>
+      <div style={{ flex: 1, height: 6, background: 'rgba(255,255,255,0.06)', borderRadius: 3, overflow: 'hidden' }}>
+        <div
+          style={{
+            width: `${widthPct}%`,
+            height: '100%',
+            background: isDebtClear ? DEBT_CLEAR_COLOR : '#8FA3BF',
+            opacity: isEntry ? 0.4 : 0.85,
+          }}
+        />
+      </div>
+      <span style={{ width: 44, textAlign: 'right', color: valueColor, fontWeight: 600 }}>
+        {formatLeverageBps(leverageBps)}
+      </span>
+    </div>
   )
 }

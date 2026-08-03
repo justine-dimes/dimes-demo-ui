@@ -123,7 +123,16 @@ describe('ScheduledDeleveragingPanel', () => {
     expect(screen.getByText(/Collected/)).toBeInTheDocument()
   })
 
-  it('no longer renders the step table, ladder chart, or what-if scrubber', () => {
+  it('renders the book-leverage deleverage ladder from entry down to 1x at debt-clear', () => {
+    renderPanel()
+    expect(screen.getByText(/Deleverage ladder/i)).toBeInTheDocument()
+    // Entry leverage 2.00x at the top, debt-clear landing at 1.00x at the bottom.
+    expect(screen.getByText('2.00x')).toBeInTheDocument()
+    expect(screen.getByText('1.00x')).toBeInTheDocument()
+    expect(screen.getByText(/Debt-clear/)).toBeInTheDocument()
+  })
+
+  it('no longer renders the what-if scrubber or the old loan/position step table', () => {
     renderPanel({ liquidationPriceUsd: '0.42', showComparison: true })
     expect(screen.queryByText('Loan after')).not.toBeInTheDocument()
     expect(screen.queryByText('Position Remaining')).not.toBeInTheDocument()
@@ -143,7 +152,7 @@ describe('ScheduledDeleveragingPanel', () => {
     expect(screen.getByText('~$203.45')).toBeInTheDocument()
     expect(screen.getByText('(2 shadow steps fired)')).toBeInTheDocument()
     expect(
-      screen.getByText(/assumes every shadow step filled at its recorded bid/i),
+      screen.getByText(/walks the recorded order-book depth for each step/i),
     ).toBeInTheDocument()
   })
 

@@ -404,8 +404,9 @@ function SettlementStrip({
         </span>
       </div>
       <div style={{ marginTop: 3, fontSize: 10, lineHeight: 1.5, color: 'var(--text-dim)' }}>
-        Estimate assumes every shadow step filled at its recorded bid — order-book depth and
-        slippage are not modelled.
+        Estimate walks the recorded order-book depth for each step (real slippage; a clip past the
+        visible depth only partially fills). Market impact and price drift during execution are not
+        modelled.
       </div>
     </div>
   )
