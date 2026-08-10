@@ -328,8 +328,10 @@ export function CommittedUnwindsPanel({
   committed,
   entryLeverageBps,
   lockedMarginUsd,
+  isPreview,
   last,
 }: {
+  isPreview?: boolean
   committed: Pick<CommittedUnwindsView, 'marginRequiredUsd' | 'debtClearPriceUsd'> & {
     rungs: { triggerPriceUsd: string; leverageBps: number }[]
   }
@@ -345,7 +347,7 @@ export function CommittedUnwindsPanel({
   }
 
   return (
-    <StatGroup label="Committed unwinds" last={last}>
+    <StatGroup label={isPreview ? "Committed unwinds (preview — quote is adaptive)" : "Committed unwinds"} last={last}>
       <div style={{ margin: '4px 0 12px' }}>
         <div
           style={{

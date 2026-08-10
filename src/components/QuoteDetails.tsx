@@ -80,7 +80,8 @@ export function QuoteDetails({
   const prevMaxGain = useMemo(() => (prev ? maxGainForOffer(prev) : null), [prev])
   const deleverageSchedule = useMemo(() => getDeleverageSchedule(offer), [offer])
   const committedUnwinds = useMemo(() => getCommittedUnwinds(offer), [offer])
-  const isCommittedQuote = getRiskMode(offer) === 'committed' && committedUnwinds?.available === true
+  const hasCommittedPlan = committedUnwinds?.available === true && committedUnwinds.plannedUnwinds.length > 0
+  const isCommittedQuote = getRiskMode(offer) === 'committed'
 
   return (
     <div style={{ padding: '12px 0' }}>
@@ -130,7 +131,7 @@ export function QuoteDetails({
         />
       )}
 
-      {isCommittedQuote && committedUnwinds && (
+      {hasCommittedPlan && committedUnwinds && (
         <CommittedUnwindsPanel
           committed={{
             marginRequiredUsd: committedUnwinds.marginRequiredUsd,
@@ -138,6 +139,7 @@ export function QuoteDetails({
             rungs: committedRungsFromPlan(committedUnwinds),
           }}
           entryLeverageBps={offer.leverageBps}
+          isPreview={!isCommittedQuote}
           last
         />
       )}
