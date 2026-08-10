@@ -313,3 +313,78 @@ function LadderRow({
     </div>
   )
 }
+
+
+// ---------------------------------------------------------------------------
+// COMMITTED MODE (merged API #5311). The quote's committedUnwinds preview and a
+// position's planned unwind rows both render as the same book-leverage ladder
+// the shadow panel used — but the backend now supplies the target leverage per
+// rung directly (targetLeverageBps / afterLeverageBps), no client derivation.
+// ---------------------------------------------------------------------------
+
+import type { CommittedUnwindsView } from '../api/committed-unwinds.types'
+
+export function CommittedUnwindsPanel({
+  committed,
+  entryLeverageBps,
+  lockedMarginUsd,
+  last,
+}: {
+  committed: Pick<CommittedUnwindsView, 'marginRequiredUsd' | 'debtClearPriceUsd'> & {
+    rungs: { triggerPriceUsd: string; leverageBps: number }[]
+  }
+  entryLeverageBps: number
+  lockedMarginUsd?: string | null
+  last?: boolean
+}) {
+  const rungs = committed.rungs
+  const maxBps = Math.max(entryLeverageBps, ...rungs.map((r) => r.leverageBps), ONE_X_BPS)
+  const barWidthPct = (bps: number): number => {
+    const span = maxBps - ONE_X_BPS
+    return span <= 0 ? 100 : Math.round(((bps - ONE_X_BPS) / span) * 100)
+  }
+
+  return (
+    <StatGroup label="Committed unwinds" last={last}>
+      <div style={{ margin: '4px 0 12px' }}>
+        <div
+          style={{
+            fontSize: 9,
+            fontWeight: 600,
+            letterSpacing: '0.12em',
+            textTransform: 'uppercase',
+            color: 'var(--text-dim)',
+            marginBottom: 6,
+          }}
+        >
+          Pre-agreed ladder — leverage steps down as rungs fire
+        </div>
+        <LadderRow label="Entry" leverageBps={entryLeverageBps} widthPct={barWidthPct(entryLeverageBps)} isEntry />
+        {rungs.map((rung, index) => (
+          <LadderRow
+            key={`${rung.triggerPriceUsd}-${index}`}
+            label={formatCentsUsd(rung.triggerPriceUsd)}
+            leverageBps={rung.leverageBps}
+            widthPct={barWidthPct(rung.leverageBps)}
+          />
+        ))}
+        {committed.debtClearPriceUsd != null && (
+          <LadderRow
+            label={`Debt-clear ${formatCentsUsd(committed.debtClearPriceUsd)}`}
+            leverageBps={ONE_X_BPS}
+            widthPct={0}
+            isDebtClear
+          />
+        )}
+      </div>
+      {committed.marginRequiredUsd != null && (
+        <StatRow label="Margin required (first-loss)" value={`$${committed.marginRequiredUsd}`} />
+      )}
+      {lockedMarginUsd != null && <StatRow nested label="Locked" value={`$${lockedMarginUsd}`} />}
+      <div style={{ marginTop: 6, fontSize: 10, lineHeight: 1.5, color: 'var(--text-dim)' }}>
+        Fixed price-triggered ladder agreed at quote time; the adaptive engine stays off this
+        position. The margin absorbs first losses and is released at close.
+      </div>
+    </StatGroup>
+  )
+}

@@ -23,7 +23,8 @@ import { StatRow } from './StatRow'
 import { StatGroup, PnlHero } from './CardViewParts'
 import { LeverageChart } from './LeverageChart'
 import { getDeleverageSchedule, getShadowDeleverage } from '../api/scheduled-deleveraging.types'
-import { ScheduledDeleveragingPanel } from './ScheduledDeleveragingPanel'
+import { ScheduledDeleveragingPanel, CommittedUnwindsPanel } from './ScheduledDeleveragingPanel'
+import { committedRungsFromRows, getCommittedPlanRows, getLockedMarginUsd, getRiskMode } from '../api/committed-unwinds.types'
 import { PositionIdRow } from './PositionCard'
 import { useCopyFlash } from '../hooks/useCopyFlash'
 
@@ -598,6 +599,18 @@ function OpenPositionDetail({
             <LeverageChart unwinds={unwinds} isLoading={isUnwindsLoading} />
           </div>
         </StatGroup>
+
+        {getRiskMode(position) === 'committed' && (
+          <CommittedUnwindsPanel
+            committed={{
+              marginRequiredUsd: null,
+              debtClearPriceUsd: null,
+              rungs: committedRungsFromRows(getCommittedPlanRows(unwinds)),
+            }}
+            entryLeverageBps={position.entry.leverageBps ?? position.effectiveLeverageBps}
+            lockedMarginUsd={getLockedMarginUsd(position)}
+          />
+        )}
 
         {deleverageSchedule && (
           <ScheduledDeleveragingPanel

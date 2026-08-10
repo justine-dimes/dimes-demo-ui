@@ -4,6 +4,8 @@ import { computeMaxGain } from '../api/types'
 import { formatUsd } from '../utils/format'
 import { formatFillPct } from '../utils/partialFill'
 import { getDeleverageSchedule } from '../api/scheduled-deleveraging.types'
+import { committedRungsFromPlan, getCommittedUnwinds, getRiskMode } from '../api/committed-unwinds.types'
+import { CommittedUnwindsPanel } from './ScheduledDeleveragingPanel'
 import { ScheduledDeleveragingPanel } from './ScheduledDeleveragingPanel'
 import { StatRow } from './StatRow'
 
@@ -77,6 +79,8 @@ export function QuoteDetails({
   const maxGain = useMemo(() => maxGainForOffer(offer), [offer])
   const prevMaxGain = useMemo(() => (prev ? maxGainForOffer(prev) : null), [prev])
   const deleverageSchedule = useMemo(() => getDeleverageSchedule(offer), [offer])
+  const committedUnwinds = useMemo(() => getCommittedUnwinds(offer), [offer])
+  const isCommittedQuote = getRiskMode(offer) === 'committed' && committedUnwinds?.available === true
 
   return (
     <div style={{ padding: '12px 0' }}>
@@ -123,6 +127,18 @@ export function QuoteDetails({
           label="Partial fill"
           value={offer.minFillBps != null ? `Allowed · min ${formatFillPct(offer.minFillBps)}` : 'Allowed'}
           valueColor="var(--yellow)"
+        />
+      )}
+
+      {isCommittedQuote && committedUnwinds && (
+        <CommittedUnwindsPanel
+          committed={{
+            marginRequiredUsd: committedUnwinds.marginRequiredUsd,
+            debtClearPriceUsd: committedUnwinds.debtClearPriceUsd,
+            rungs: committedRungsFromPlan(committedUnwinds),
+          }}
+          entryLeverageBps={offer.leverageBps}
+          last
         />
       )}
 
